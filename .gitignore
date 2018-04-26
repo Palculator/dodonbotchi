@@ -101,4 +101,12 @@ ENV/
 # mypy
 .mypy_cache/
 
+# Vim tags
 tags
+
+# Pycharm project folder
+.idea
+
+log/
+*.log
+*.cfg

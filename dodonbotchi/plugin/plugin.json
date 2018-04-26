@@ -1,0 +1,10 @@
+{
+  "plugin": {
+    "name": "{{plugin_name}}",
+    "description": "DoDonBotchi API",
+    "version": "0.1",
+    "author": "Signaltonsalat",
+    "type": "plugin",
+    "start": "false"
+  }
+}
