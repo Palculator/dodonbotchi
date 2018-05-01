@@ -1,3 +1,8 @@
+"""
+Gives information about the DoDonBotchi application, specifies its dependencies
+and defines entry points for command line use.
+"""
+
 from setuptools import setup
 
 setup(
@@ -7,8 +12,12 @@ setup(
     description='DoDonPatchi AI',
     license='MIT',
     keywords='games bot dodonpatchi ai mame',
-    packages='dodonbotchi',
-    py_modules=['dodonbotchi'],
+    packages=['dodonbotchi'],
+    entry_points={
+        'console_scripts': [
+            'dodonbotchi = dodonbotchi.main:cli'
+        ]
+    },
     install_requires=[
         'click==6.7',
         'cycler==0.10.0',
@@ -23,6 +32,7 @@ setup(
         'python-dateutil==2.7.2',
         'pytz==2018.4',
         'scikit-learn==0.19.1',
-        'six==1.11.0'
+        'six==1.11.0',
+        'tensorflow==1.8.0'
     ]
 )

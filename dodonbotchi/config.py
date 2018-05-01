@@ -1,16 +1,34 @@
+"""
+This module defines DoDonBotchi's global configuration, including default
+values for every config option. Functions to load, save, and create a default
+configuration file are offered.
+
+At the start of the program, `ensure_config` should be called to either create
+a default configuration, if none exists, or load the existing one. The module
+then stores an instance of the Config class in the field `CFG` which other
+modules can easily import like `from dodonbotchi.config import CFG`.
+"""
+
 import logging as log
 import json
 import os
 
 MAME_PATH = os.path.expanduser('~/.mame/')
-PLUGIN_NAME = 'dodonbotchi_api'
 HOST = '127.0.0.1'
 PORT = 32512
 
+WINDOWED = True
+SAVE_STATE = None
+SHOW_SPRITES = "false"
+TICK_RATE = 4
+
 
 class Config(dict):
-    def __init__(self):
-        super().__init__()
+    """
+    Configuration class which mainly wraps around a dictionary to offer access
+    to keys as members. Instead of `spam['eggs']`, it's possible to simply go
+    `spam.eggs`.
+    """
 
     def __getstate__(self):
         return self.__dict__.items()
@@ -19,50 +37,69 @@ class Config(dict):
         for key, val in items:
             self.__dict__[key] = val
 
-    def __setitem__(self, key, val):
-        return super().__setitem__(key, val)
-
-    def __getitem__(self, key):
+    def __getattr__(self, key):
         return super().__getitem__(key)
 
-    def __delitem__(self, key):
-        return super().__delitem__(key)
+    def __setattr__(self, key, val):
+        return super().__setitem__(key, val)
 
-    __getattr__ = __getitem__
-    __setattr__ = __setitem__
+    def load_values(self, dic):
+        """
+        Loads every key-value pair from the given dictionary into the config.
+        """
+        for key, val in dic.items():
+            self[key] = val
 
     def load(self, cfg_file):
+        """
+        Loads every key-value pair in the given json file into the config.
+        """
         with open(cfg_file) as in_file:
             cfg_str = in_file.read()
             cfg_json = json.loads(cfg_str)
-
-        for key, val in cfg_json.items():
-            self[key] = val
+        self.load_values(cfg_json)
 
     def save(self, cfg_file):
+        """
+        Saves every key-value pair of this config into the given json file.
+        """
         with open(cfg_file, 'w') as out_file:
-            cfg_str = json.dumps(self, indent=True, sort_keys=True)
+            cfg_str = json.dumps(self, indent=4, sort_keys=True)
             out_file.write(cfg_str)
 
 
-cfg = Config()
+CFG = Config()
 
 
 def get_default():
+    """
+    Creates and returns an instance of the `Config` class with the default
+    value for each option.
+    """
+    dic = {
+        'mame_path': MAME_PATH,
+        'host': HOST,
+        'port': PORT,
+        'windowed': WINDOWED,
+        'save_state': SAVE_STATE,
+        'show_sprites': SHOW_SPRITES,
+        'tick_rate': TICK_RATE
+    }
+
     default = Config()
-
-    default.mame_path = MAME_PATH
-    default.plugin_name = PLUGIN_NAME
-    default.host = HOST
-    default.port = PORT
-
+    default.load_values(dic)
     return default
 
 
 def ensure_config(cfg_file):
+    """
+    Tests if the given cfg_file path points to a configuration file. If not, a
+    default configuration will be written to that file. The file is then loaded
+    into the `CFG` field.
+    """
     if not os.path.exists(cfg_file):
         default = get_default()
         default.save(cfg_file)
         log.debug('Saved fresh default cfg to: %s', cfg_file)
 
-    cfg.load(cfg_file)
+    CFG.load(cfg_file)

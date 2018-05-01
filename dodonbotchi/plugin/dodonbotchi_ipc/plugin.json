@@ -1,7 +1,7 @@
 {
   "plugin": {
     "name": "{{plugin_name}}",
-    "description": "DoDonBotchi API",
+    "description": "DoDonBotchi IPC",
     "version": "0.1",
     "author": "Signaltonsalat",
     "type": "plugin",
