@@ -5,7 +5,7 @@ exports.name = '{{plugin_name}}'
 exports.version = '0.1'
 exports.description = 'DoDonBotchi IPC'
 exports.license = 'MIT'
-exports.author = { name = 'Signaltonsalat' }
+exports.author = {name = 'Signaltonsalat'}
 
 local botchi = exports
 
@@ -15,11 +15,14 @@ local screen = nil
 
 local inputMap = {}
 local inputState = {}
+local buttons = 'UDLR12'
 
 local socket = nil
 local connected = false
 
-local sleepFrames = 60
+local tickRate = {{tick_rate}}
+local snapRate = {{snap_rate}}
+local sleepFrames = 30
 
 local showSprites = {{show_sprites}}
 local spriteColours = {
@@ -83,7 +86,10 @@ function updateInputs()
         if v == 1 then
             inputMap[k]:set_value(0)
             inputState[k] = 0
-            print('Stopping input: ' .. k)
+        end
+
+        if v == -1 then
+            inputMap[k]:set_value(1)
         end
 
         if v > 1 then
@@ -104,7 +110,7 @@ end
 
 function singlePress(button)
     inputMap[button]:set_value(1)
-    inputState[button] = 3
+    inputState[button] = tickRate
 end
 
 function readScore()
@@ -124,11 +130,13 @@ function readScore()
 end
 
 function readGameState()
+    readSprites()
+
     ret = {}
     ret['bombs'] = mem:read_u8(0x102CB0)
     ret['lives'] = mem:read_u8(0x101965)
-    ret['coins'] = mem:read_u8(0x1013AB)
     ret['score'] = readScore()
+    ret['sprites'] = sprites
 
     return ret
 end
@@ -139,12 +147,10 @@ function startBotchi()
     screen = manager:machine().screens[':screen']
 
     initInputMap()
-
-    sendMessage('HELLO') -- o/
 end
 
 function readSprites()
-    local sid, pos, mode, data
+    local sid, sid1, sid2, pos, x, y, mode, width, height, data
 
     sprites = {}
     for i = 0x400000, 0x404000 - 0x10, 0x10 do
@@ -153,11 +159,38 @@ function readSprites()
         sid = math.floor(sid / 4294967296)
 
         if sid > 0 then
+            pos_x = pos / 65536
+            pos_y = pos % 65536
+
             mode = mem:read_u16(i + 0x8)
-            data = { sid = sid, pos = pos, mode = mode }
+
+            siz_x = 16 * (mode / 256)
+            siz_y = 16 * (mode % 256)
+
+            data = {sid = sid,
+                    pos_x = pos_x,
+                    pos_y = pos_y,
+                    siz_x = siz_x,
+                    siz_y = siz_y}
 
             table.insert(sprites, data)
         end
+    end
+end
+
+function displayBotchi()
+    local pos, x, y, width, height, colour_idx, colour
+
+    for i, v in pairs(sprites) do
+        pos_x = v['pos_x']
+        pos_y = v['pos_y']
+        siz_x = v['siz_x']
+        siz_y = v['siz_y']
+
+        colour_idx = v['sid'] % 3 + 1
+        colour = spriteColours[colour_idx]
+
+        screen:draw_box(pos_x, pos_y, pos_x + siz_x, pos_y + siz_y, 0, colour)
     end
 end
 
@@ -169,47 +202,65 @@ function produceSocketOutput()
     local state, message
 
     state = readGameState()
-    message = json.stringify(state)
+    message = { message = 'observation', observation = state }
+    message = json.stringify(message)
 
     sendMessage(message)
 end
 
-function handleSocketInput()
-    local message = socket:read(1024)
-end
+function performAction(action)
+    for i = 1, #buttons do
+        local button = buttons:sub(i, i)
+        local state = action:sub(i, i)
 
-function updateBotchi()
-    if manager:machine().paused then
-        return
-    end
+        if state == '1' then
+            startHold(button)
+        end
 
-    updateInputs()
-
-    readSprites()
-
-    if connected then
-        handleSocketInput()
-
-        if screen:frame_number() % {{tick_rate}} == 0 then
-            produceSocketOutput()
+        if state == '0' then
+            stopHold(button)
         end
     end
 end
 
-function displayBotchi()
-    local pos, x, y, width, height, colour_idx, colour
+function handleSocketInput()
+    local message = socket:read(1024)
 
-    for i, v in pairs(sprites) do
-        pos = v['pos']
-        x = math.floor(pos / 65536)
-        y = pos % 65536
-        width = 16 * (v['mode'] / 256)
-        height = 16 * (v['mode'] % 256)
+    if message ~= nil and #message > 0 then
+        message = json.parse(message)
+        if message['command'] == 'kill' then
+            manager:machine():exit()
+        end
 
-        colour_idx = v['sid'] % 3 + 1
-        colour = spriteColours[colour_idx]
+        if message['command'] == 'action' then
+            performAction(message['inputs'])
+            emu.unpause()
+            sleepFrames = tickRate
+        end
+    end
+end
 
-        screen:draw_box(x, y, x + width, y + height, 0, colour)
+function updateBotchi()
+    if connected then
+        local paused = manager:machine().paused
+
+        if screen:frame_number() % snapRate == 0 then
+            screen:snapshot()
+        end
+
+        if paused then
+            handleSocketInput()
+        else
+
+            updateInputs()
+
+            if sleepFrames == 0 then
+                produceSocketOutput()
+                emu.pause()
+            else
+                sleepFrames = sleepFrames - 1
+            end
+        end
     end
 end
 
@@ -226,4 +277,3 @@ function botchi.startplugin()
 end
 
 return exports
-
