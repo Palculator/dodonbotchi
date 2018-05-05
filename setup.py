@@ -33,6 +33,7 @@ setup(
         'pytz==2018.4',
         'scikit-learn==0.19.1',
         'six==1.11.0',
-        'tensorflow==1.8.0'
+        'tensorflow==1.8.0',
+        'keras-rl==0.4.0'
     ]
 )
