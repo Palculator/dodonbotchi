@@ -18,9 +18,13 @@ HOST = '127.0.0.1'
 PORT = 32512
 
 WINDOWED = True
+NOVIDEO = False
+NOAUDIO = True
+NOTHROTTLE = False
 SAVE_STATE = None
 SHOW_SPRITES = "false"
-TICK_RATE = 4
+TICK_RATE = 2
+SNAP_RATE = 100
 
 
 class Config(dict):
@@ -81,9 +85,13 @@ def get_default():
         'host': HOST,
         'port': PORT,
         'windowed': WINDOWED,
+        'novideo': NOVIDEO,
+        'noaudio': NOAUDIO,
+        'nothrottle': NOTHROTTLE,
         'save_state': SAVE_STATE,
         'show_sprites': SHOW_SPRITES,
-        'tick_rate': TICK_RATE
+        'tick_rate': TICK_RATE,
+        'snap_rate': SNAP_RATE
     }
 
     default = Config()

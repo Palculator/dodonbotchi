@@ -2,80 +2,81 @@
 This module contains DoDonBotchi's brain and neuroevolutional code. It handles
 learning, evolution, and controlling DoDonPachi in realtime.
 """
-import json
+import logging as log
 import os
-import random
+import os.path
+
+from dodonbotchi.config import CFG as cfg
+from dodonbotchi.mame import DoDonPachiEnv
+from dodonbotchi.util import get_now_string, generate_now_serial_number
+from dodonbotchi.util import ensure_directories
+
+from rl.agents.cem import CEMAgent
+from rl.memory import EpisodeParameterMemory
 
 from tensorflow.python import keras
-from tensorflow.python.keras import models
-
-from dodonbotchi import mame
-from dodonbotchi.config import CFG as cfg
-
-BRAIN_FILE = 'brain.keras'
-PROPS_FILE = 'props.json'
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Dense, Activation, Flatten
+from tensorflow.python.keras.optimizers import Adam
 
 
-def evaluate_brain(brain, mipc):
-    pass
+REC_DIR = 'recordings'
+CAP_DIR = 'captures'
+
+BRAIN_FILE_FMT = 'brain_{}.h5f'
+PROPS_FILE_FMT = 'props_{}.json'
 
 
-class Brain:
-    @staticmethod
-    def save(brain, directory):
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+def create_model(actions, observations):
+    model = Sequential()
+    model.add(Flatten(input_shape=(1, observations)))
+    model.add(Dense(256))
+    model.add(Activation('relu'))
+    model.add(Dense(512))
+    model.add(Activation('relu'))
+    model.add(Dense(512))
+    model.add(Activation('relu'))
+    model.add(Dense(actions))
+    model.add(Activation('softmax'))
 
-        brain_file = os.path.join(directory, BRAIN_FILE)
-        brain.model.save(brain_file)
+    log.info('Created neural network model: ')
+    log.info(model.summary())
 
-        props_dict = dict()
-        props_dict['bid'] = brain.bid
-        props_dict['score'] = brain.score
+    return model
 
-        props_file = os.path.join(directory, PROPS_FILE)
-        with open(props_file) as out_file:
-            json_content = json.dumps(props_dict, indent=4, sort_keys=True)
-            out_file.write(json_content)
 
-    @staticmethod
-    def load(directory):
-        if not os.path.exists(directory):
-            print('Brain directory {} does not exist'.format(directory))
-            return None
-
-        brain_file = os.path.join(directory, BRAIN_FILE)
-        if not os.path.exists(brain_file):
-            print('Brain model file {} does not exist.'.format(directory))
-            return None
-
-        props_file = os.path.join(directory, PROPS_FILE)
-        if not os.path.exists(props_file):
-            print('Brain props file {} does not exist.'.format(directory))
-            return None
-
-        model = models.load_model(brain_file)
-        with open(props_file, 'r') as in_file:
-            props_content = in_file.read()
-            props = json.loads(props_content)
-
-        brain = Brain(props['bid'], model)
-        return brain
-
-    def __init__(self, bid, model):
-        self.bid = bid
-        self.model = model
-        self.score = None
-
-    def fit(self, states, inputs):
-        epochs = cfg.epochs
-        self.model.fit(states, inputs, epochs=epochs)
-
-    def predict(self, observation):
-        pass
+def create_agent(actions, observations):
+    model = create_model(actions, observations)
+    memory = EpisodeParameterMemory(limit=1000, window_length=1)
+    cem = CEMAgent(model=model, nb_actions=actions, memory=memory)
+    cem.compile()
+    return cem
 
 
 class EXY:
-    def __init__(self, seed):
-        self.seed = seed
-        self.rng = random.Random(seed)
+    def __init__(self, output):
+        self.output = output
+        self.serial = generate_now_serial_number()
+
+        self.exy_dir = get_now_string()
+        self.exy_dir = '{} - {}'.format(self.exy_dir, self.serial)
+        self.exy_dir = os.path.join(output, self.exy_dir)
+
+        self.inp_dir = os.path.join(self.exy_dir, REC_DIR)
+        self.snp_dir = os.path.join(self.exy_dir, CAP_DIR)
+
+        ensure_directories(self.exy_dir, self.inp_dir, self.snp_dir)
+
+    def train(self, seed=None):
+        env = DoDonPachiEnv(seed)
+        try:
+            env.configure(inp_dir=self.inp_dir, snp_dir=self.snp_dir)
+            env.reset()
+
+            actions = env.action_space.count
+            observations = env.observation_space.dimension
+            agent = create_agent(actions, observations)
+
+            agent.fit(env, nb_steps=10000000000, verbose=2)
+        finally:
+            env.close()

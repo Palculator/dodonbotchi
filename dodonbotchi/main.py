@@ -13,8 +13,8 @@ from datetime import datetime
 
 import click
 
-from dodonbotchi import mame
 from dodonbotchi.config import ensure_config
+from dodonbotchi.exy import EXY
 
 TIMESTAMP = datetime.now().isoformat().replace(':', '_')
 DEF_LOG = 'log/dodonbotchi_{}.log'.format(TIMESTAMP)
@@ -65,15 +65,16 @@ def cli(log_file=None, cfg_file=None):
 
 
 @cli.command()
-def run():
+@click.option('--seed', default=32512)
+@click.argument('output', type=click.Path(file_okay=False))
+def train(seed, output):
     """
-    Runs through the main function of DoDonBotchi: Evolving a neural net that
-    plays DoDonPachi well.
+    Trains a neural net writing trial runs, captures, progress information, and
+    brain states to the specified output folder until the user interrupts
+    training.
     """
-    mipc = mame.start_mame_ipc(video=True)
-    while True:
-        line = mipc.sfile.readline()
-        print(line)
+    exy = EXY(output)
+    exy.train(seed)
 
 
 if __name__ == '__main__':
