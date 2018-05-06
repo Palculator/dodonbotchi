@@ -22,6 +22,7 @@ SPRITE_COUNT = 1024
 OBSERVATION_DIMENSION = 1 + 1 + 1 + (SPRITE_COUNT * 5)
 
 PLUGIN_IPC = 'dodonbotchi_ipc'
+PLUGIN_REC = 'dodonbotchi_rec'
 
 TEMPLATE_LUA = 'init.lua'
 TEMPLATE_JSON = 'plugin.json'
@@ -355,6 +356,16 @@ def render_ipc_plugin():
     return render_plugin(PLUGIN_IPC, TEMPLATE_LUA, TEMPLATE_JSON, **opts)
 
 
+def render_rec_plugin():
+    """
+    Renders the recording display plugin used to display information while
+    rendering out recordings of AI trials. The rendered code is returned as a
+    (lua, json) tuple.
+    """
+    opts = {}
+    return render_plugin(PLUGIN_REC, TEMPLATE_LUA, TEMPLATE_JSON, **opts)
+
+
 def get_plugin_path(plugin_name):
     """
     Gets the target directory to save a plugin of the given name to, using the
@@ -395,6 +406,16 @@ def write_ipc_plugin():
     write_plugin(PLUGIN_IPC, lua_code, json_code)
 
 
+def write_rec_plugin():
+    """
+    Renders and saves the recording display plugin to the MAME home directory
+    specified in the global config.
+    """
+    lua_code, json_code = render_rec_plugin()
+    write_plugin(PLUGIN_REC, lua_code, json_code)
+
+
+
 def generate_base_call():
     """
     Generates a list of parameters to start MAME with DoDonPachi which contain
@@ -423,6 +444,32 @@ def generate_base_call():
         call.append(cfg.save_state)
 
     return call
+
+
+def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
+    write_rec_plugin()
+
+    call = generate_base_call()
+
+    call.append('-plugin')
+    call.append(PLUGIN_REC)
+
+    if inp_dir:
+        call.append('-input_directory')
+        call.append(inp_dir)
+
+    call.append('-playback')
+    call.append(inp_file)
+    call.append('-exit_after_playback')
+
+    if snp_dir:
+        call.append('-snapshot_directory')
+        call.append(snp_dir)
+
+    call.append('-aviwrite')
+    call.append(avi_file)
+
+    return subprocess.call(call)
 
 
 class DoDonPachiEnv(Env):
