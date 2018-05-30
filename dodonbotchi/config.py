@@ -22,7 +22,9 @@ NOVIDEO = False
 NOAUDIO = True
 NOTHROTTLE = False
 SAVE_STATE = None
-SHOW_SPRITES = "false"
+RENDER_SPRITES = "false"
+RENDER_STATE = "false"
+DUMP_FRAMES = "false"
 TICK_RATE = 2
 SNAP_RATE = 100
 
@@ -89,7 +91,9 @@ def get_default():
         'noaudio': NOAUDIO,
         'nothrottle': NOTHROTTLE,
         'save_state': SAVE_STATE,
-        'show_sprites': SHOW_SPRITES,
+        'render_sprites': RENDER_SPRITES,
+        'render_state': RENDER_STATE,
+        'dump_frames': DUMP_FRAMES,
         'tick_rate': TICK_RATE,
         'snap_rate': SNAP_RATE
     }

@@ -2,8 +2,10 @@
 This module implements classes related to giving access to MAME and DoDonPachi
 as an OpenAI-Gym-like environment.
 """
+import copy
 import json
 import logging as log
+import math
 import os
 import random
 import socket
@@ -14,54 +16,73 @@ from time import sleep
 import numpy as np
 
 from jinja2 import Environment, FileSystemLoader
-from dodonbotchi.config import CFG as cfg
-from dodonbotchi.util import get_now_string, ensure_directories
+from PIL import Image, ImageDraw
 from rl.core import Env, Space
 
-SPRITE_COUNT = 1024
-OBSERVATION_DIMENSION = 1 + 1 + 1 + (SPRITE_COUNT * 5)
+from dodonbotchi.config import CFG as cfg
+from dodonbotchi.util import ensure_directories
 
-PLUGIN_IPC = 'dodonbotchi_ipc'
-PLUGIN_REC = 'dodonbotchi_rec'
+RECORDING_FILE = 'recording.inp'
 
-TEMPLATE_LUA = 'init.lua'
-TEMPLATE_JSON = 'plugin.json'
+IMG_WIDTH = 240
+IMG_HEIGHT = 320
+
+OBS_SCALE = 4
+OBS_WIDTH = IMG_WIDTH // OBS_SCALE
+OBS_HEIGHT = IMG_HEIGHT // OBS_SCALE
+OBS_CHANNELS = 'L'
+
+COLOUR_BACKGROUND = '#000000'
+
+COLOUR_ENEMIES = '#AAAAAA'
+COLOUR_BONUSES = '#444444'
+COLOUR_POWERUP = '#666666'
+COLOUR_BULLETS = '#DDDDDD'
+COLOUR_OWNSHOT = '#222222'
+
+COLOUR_COMBO = '#888888'
+
+COLOUR_SHIP = '#FFFFFF'
+
+PLUGIN_NAME = 'dodonbotchi_mame'
+
+MAX_COMBO = 0x37
+MAX_DISTANCE = 400  # Furthest distance two objects can have in 240x320
+COMBO_BAR_HEIGHT = 4
+
+INPUT_SHAPE = (OBS_WIDTH, OBS_HEIGHT)
 
 
 class DoDonPachiActions(Space):
     """
-    This class defines the possible action space for the DoDonPachi AI. Actions
-    are encoded as a sequence of button-hold states for each possible button
-    player 1 can press. The buttons are:
+    This class defines the valid action space for DoDonBotchi. Actions are
+    encoded as strings representing button and direction states. The format of
+    these strings is:
 
-        UDLR123S
+        VH1
 
-    Which represent up, down, left, right, button 1, button 2, button 3, and
-    start. The hold-state of a button is given as either -, 0, or 1, which
-    stand for:
+    Where V stands for the vertical axis, H for the horizontal axis, and 1 for
+    button 1. An actual action replaces each of these with the corresponding
+    input state:
 
-        -: No change
-        0: Stop holding
-        1: Start holding
+        210
 
-    An example action would be:
+    This example represents positive movement along the V axis, negative
+    movement along the H axis, and not pressing 1. The same directions, but
+    pressing 1, would be `211`, and so on.
 
-        ---11---
-
-    Which would specify that player 1 should start holding right and button 1
-    to shoot. If they wanted to stop shooting and also start moving up, the
-    next action would be:
-
-        1---0---
-
-    Making player 1 start holding up, not touch the hold-state of left, but
-    stop holding button 1.
     """
 
     def __init__(self, seed=None):
-        self.buttons = 'UDLR12'
-        self.states = '-01'
-        self.count = len(self.states) ** len(self.buttons)
+        self.directions = 'VH'
+        self.buttons = '1'
+        self.axis_states = '012'
+        self.button_states = '01'
+
+        self.shape = len(self.axis_states) ** len(self.directions)
+        self.shape *= len(self.button_states) ** len(self.buttons)
+        self.shape = (self.shape,)
+
         self.rng = random.Random()
         if seed:
             self.rng.seed(seed)
@@ -71,30 +92,23 @@ class DoDonPachiActions(Space):
         Converts an ordinal integer representing an action to an action encoded
         in the string format outlined above.
         """
-        if ordinal >= self.count:
+        if ordinal >= self.shape[0]:
             raise ValueError('Invalid action ordinal: {}'.format(ordinal))
 
         action = ''
+        base = len(self.axis_states)
+        for _ in self.directions:
+            idx = ordinal % base
+            action += self.axis_states[idx]
+            ordinal //= base
+        base = len(self.button_states)
         for _ in self.buttons:
-            idx = ordinal % len(self.states)
-            action += self.states[idx]
-            ordinal //= len(self.states)
+            idx = ordinal % base
+            action += self.button_states[idx]
+            ordinal //= base
 
-        assert len(action) == len(self.buttons)
+        assert len(action) == len(self.directions) + len(self.buttons)
         return action
-
-    def to_ordinal(self, action):
-        """
-        Converts a string-encoded action to an ordinal integer.
-        """
-        ordinal = 0
-        for state in action[::-1]:
-            idx = self.states.index(state)
-            ordinal += idx
-            ordinal *= len(self.states)
-
-        assert ordinal < self.count
-        return ordinal
 
     def sample(self, seed=None):
         """
@@ -104,98 +118,229 @@ class DoDonPachiActions(Space):
             self.rng.seed(seed)
 
         ret = ''
+        for _ in self.directions:
+            state = self.rng.choice(self.axis_states)
+            ret += state
         for _ in self.buttons:
-            state = self.rng.choice(self.states)
+            state = self.rng.choice(self.button_states)
             ret += state
         return ret
 
     def contains(self, action):
         """
         Tests if the given action string is a member of this action space and
-        returns True iff it is. Criteria are:
-            - Action is a string
-            - Length is equal to the length of `BUTTONS`
-            - Each character must be a member of `STATES`
+        returns True iff it is.
         """
         if not isinstance(action, str):
             return False
-        if len(action) != len(self.buttons):
+        if len(action) != len(self.buttons) + len(self.directions):
             return False
 
-        for state in action:
-            if state not in self.states:
+        for state in action[:len(self.directions)]:
+            if state not in self.axis_states:
+                return False
+
+        for state in action[len(self.directions):]:
+            if state not in self.button_states:
                 return False
 
         return True
 
 
-def observation_from_dict(dic):
+def get_point_distance(a_x, a_y, b_x, b_y, root=False):
     """
-    Converts a game state dictionary to a high-dimensional tuple representing
-    an observation for a neural network. The dictionary is expected to have
-    the following items:
-        * `bombs`: Current amount of bombs
-        * `lives`: Current amount of lives left
-        * `score`: Current score
-        * `sprites`: A list of dictionaries representing a sprite, each one has:
-            * `sid`: The sprite ID
-            * `pos_x`: X position
-            * `pos_y`: Y position
-            * `siz_x`: Width
-            * `siz_y`: Height
-
-    The sprites list can at most have `SPRITE_COUNT` entries. More than that
-    will cause a error, fewer than that will be padded with null sprites.
-
-    The returned tuple has the following layout:
-
-        (bombs, lives, score, sprite_1, sprite_2, ... sprite_n)
-
-    Where each sprite's data is flatly written as five numbers, not a nested
-    tuple. The observation is always a flat tuple of length
-    `OBSERVATION_DIMENSION`.
+    Returns the distance between the points a and b, given as x, y coordinate
+    pairs. If the root flag is set, the actual distance between them is
+    returned, otherwise, the squared distance is returned. This helps save
+    processing time when distances are only used for comparisons.
     """
+    a = b_x - a_x
+    b = b_y - a_y
+    dist = a ** 2 + b ** 2
+    if root:  # sqrt is an expensive operation so we make it optional
+        dist = math.sqrt(dist)
+    return dist
 
-    if len(dic['sprites']) > SPRITE_COUNT:
-        raise ValueError('Too many sprites: {}'.format(len(dic['sprites'])))
 
-    bombs = dic['bombs']
-    lives = dic['lives']
-    score = dic['score']
+def find_closest_object(needle_x, needle_y, haystack):
+    """
+    Finds the object with the shortest distance to the given x, y coordinates
+    within the given list of objects. Objects are expected as dictionaries that
+    contain their position in `pos_x` and `pos_y` entries.
+    """
+    min_dist = MAX_DISTANCE ** 2
+    min_obj = None
+    for obj in haystack:
+        obj_x = obj['pos_x']
+        obj_y = obj['pos_y']
+        obj_dist = get_point_distance(needle_x, needle_y, obj_x, obj_y)
+        if obj_dist < min_dist:
+            min_dist = obj_dist
+            min_obj = obj
+    return min_obj, math.sqrt(min_dist)
 
-    sprites = []
-    for sprite_dic in dic['sprites']:
-        sid = sprite_dic['sid']
 
-        pos_x = sprite_dic['pos_x']
-        pos_y = sprite_dic['pos_y']
-        siz_x = sprite_dic['siz_x']
-        siz_y = sprite_dic['siz_y']
+def grade_observation(obs):
+    """
+    Grades the quality of the given observation, returning a value between 0.0
+    and 1.0 -- the higher the better.
 
-        sprite = [sid, pos_x, pos_y, siz_x, siz_y]
-        sprites.append(sprite)
+    The grading criteria are:
 
-    if len(sprites) < SPRITE_COUNT:
-        for _ in range(SPRITE_COUNT - len(sprites)):
-            sprite = [0, 0, 0, 0, 0]
-            sprites.append(sprite)
+        - Shortest distance of an own shot to an enemy
+        - Shortest distance of an enemy shot to our ship
+        - Combo timer
 
-    assert len(sprites) == SPRITE_COUNT
+    A perfect grade is rewarded when the shortest distance from one of our
+    shots to an enemy is 1, the shortest distance of an enemy shot to our ship
+    is 400, and the combo timer is full.
 
-    sprites = sorted(sprites, key=lambda sprite: (sprite[1], sprite[2]))
-    sprites = [n for sprite in sprites for n in sprite]
+    Special cases are when there are simply no enemies or bullets on screen; in
+    those cases, the function assigns a perfect score to those components of
+    the grade.
 
-    observation = (bombs, lives, score, *sprites)
-    assert len(observation) == OBSERVATION_DIMENSION
-    return observation
+    The resulting grade is returned as a number.
+    """
+    ship = obs['ship']
+    ship_x = ship['x']
+    ship_y = ship['y']
+
+    combo = obs['combo']
+
+    enemies = obs['enemies']
+    bullets = obs['bullets']
+    ownshot = obs['ownshot']
+
+    bullet_reward = 1
+    enemy_reward = 1
+    combo_reward = combo / MAX_COMBO
+
+    log.info('Current combo timer is: %s', combo)
+    log.info('Determined combo reward to be: %s', combo_reward)
+
+    bullet, bullet_dist = find_closest_object(ship_x, ship_y, bullets)
+    if bullet:
+        log.debug('Closest bullet at %s: %s: %s, %s',
+                  bullet_dist,
+                  bullet['id'],
+                  bullet['pos_x'],
+                  bullet['pos_y'])
+        bullet_reward = bullet_dist / MAX_DISTANCE
+    else:
+        log.debug('No bullet on screen.')
+    log.info('Determined bullet reward to be: %s', bullet_reward)
+
+    enemy, enemy_dist = None, MAX_DISTANCE
+    for own in ownshot:
+        own_x = own['pos_x']
+        own_y = own['pos_y']
+        cur_enemy, cur_dist = find_closest_object(own_x, own_y, enemies)
+        if cur_dist < enemy_dist:
+            enemy = cur_enemy
+            enemy_dist = cur_dist
+    if enemy:
+        if enemy_dist == 0:
+            enemy_dist = 1  # Avoid division by 0
+        log.debug('Closest enemy at %s: %s: %s, %s',
+                  enemy_dist,
+                  enemy['id'],
+                  enemy['pos_x'],
+                  enemy['pos_y'])
+        enemy_reward = 1.0 / enemy_dist
+    else:
+        log.debug('No enemy/ownshot on screen.')
+    log.info('Determined enemy reward to be: %s', enemy_reward)
+
+    reward = combo_reward + bullet_reward + enemy_reward
+    reward /= 3
+    log.info('Determined observation reward to be: %s', reward)
+
+    return reward
+
+
+def draw_objects(draw, objects, colour, scale=2):
+    """
+    Draws the given list of objects as boxes to the given ImageDraw object
+    using the given colour. Objects are expected to be dictionaries containing
+    their center position as `pos_x` and `pos_y` entries, and the object's size
+    as `siz_x` and `siz_y` entries.
+    """
+    for obj in objects:
+        off_x = obj['siz_x'] / scale
+        off_y = obj['siz_y'] / scale
+
+        min_x = OBS_HEIGHT - obj['pos_x'] - off_x
+        min_y = obj['pos_y'] - off_y
+        max_x = OBS_HEIGHT - obj['pos_x'] + off_x
+        max_y = obj['pos_y'] + off_y
+
+        draw.rectangle((min_y, min_x, max_y, max_x), fill=colour)
+
+
+def scale_objects(objects):
+    """
+    Scales the given list of objects down in-place, dividing their positions
+    and sizes by `OBS_SCALE`.
+    """
+    for obj in objects:
+        obj['pos_x'] = obj['pos_x'] // OBS_SCALE
+        obj['pos_y'] = obj['pos_y'] // OBS_SCALE
+        obj['siz_x'] = obj['siz_x'] // OBS_SCALE
+        obj['siz_y'] = obj['siz_y'] // OBS_SCALE
+
+
+def observation_to_image(obs):
+    """
+    Renders the given observation dictionary into an image that represents the
+    game state described in the observation. The resulting image is returned as
+    a pillow Image object.
+    """
+    obs = copy.deepcopy(obs)
+
+    img = Image.new(OBS_CHANNELS, (OBS_WIDTH, OBS_HEIGHT), COLOUR_BACKGROUND)
+    draw = ImageDraw.Draw(img)
+
+    enemies = obs['enemies']
+    bullets = obs['bullets']
+    ownshot = obs['ownshot']
+    powerup = obs['powerup']
+    bonuses = obs['bonuses']
+
+    scale_objects(enemies)
+    scale_objects(bullets)
+    scale_objects(ownshot)
+    scale_objects(powerup)
+    scale_objects(bonuses)
+
+    ship_obj = {
+        'pos_x': obs['ship']['x'] // OBS_SCALE,
+        'pos_y': obs['ship']['y'] // OBS_SCALE,
+        'siz_x': 16 // OBS_SCALE,
+        'siz_y': 16 // OBS_SCALE
+    }
+
+    draw_objects(draw, enemies, COLOUR_ENEMIES)
+    draw_objects(draw, ownshot, COLOUR_OWNSHOT, 4)
+    draw_objects(draw, bonuses, COLOUR_BONUSES, 4)
+    draw_objects(draw, powerup, COLOUR_POWERUP)
+    draw_objects(draw, bullets, COLOUR_BULLETS, 4)
+
+    draw_objects(draw, [ship_obj], COLOUR_SHIP)
+
+    combo_width = int((obs['combo'] / MAX_COMBO) * OBS_WIDTH)
+    if combo_width:
+        rect = (0, OBS_HEIGHT - COMBO_BAR_HEIGHT, combo_width, OBS_HEIGHT)
+        draw.rectangle(rect, fill=COLOUR_COMBO)
+
+    del draw
+
+    return img
 
 
 class DoDonPachiObservations(Space):
     """
-    Defines the observation space for DoDonPachi, an observation being a tuple
-    describing the game state. The layout of such an observation is described
-    in `observation_from_dict` and elements of this space are expected to
-    follow it.
+    Defines the observation space for DoDonPachi. Observations are grayscale
+    images of size OBS_WIDTH x OBS_HEIGHT.
     """
 
     def __init__(self, seed=None):
@@ -203,217 +348,40 @@ class DoDonPachiObservations(Space):
         if seed:
             self.rng.seed(seed)
 
-        self.dimension = OBSERVATION_DIMENSION
-
-        self.max_bombs = 6
-        self.max_lives = 3
-        self.max_score = 99999999
-        self.max_pos = 4095
-        self.max_siz = 511
-
-    def sample(self, seed=None):
-        """
-        Procues a random observation valid according to the format laid out in
-        the documentation of `observation_from_dict` and returns it as a tuple.
-        """
-        if seed:
-            self.rng.seed(seed)
-
-        bombs = self.rng.randint(0, self.max_bombs)
-        lives = self.rng.randint(0, self.max_lives)
-        score = self.rng.randint(0, self.max_score)
-
-        sprites = []
-        for _ in range(SPRITE_COUNT):
-            sid = self.rng.randint(0, 2 ** 32)
-
-            pos_x = self.rng.randint(0, self.max_pos)
-            pos_y = self.rng.randint(0, self.max_pos)
-
-            siz_x = self.rng.randint(0, self.max_siz)
-            siz_y = self.rng.randint(0, self.max_siz)
-
-            sprite = {
-                'sid': sid,
-                'pos_x': pos_x,
-                'pos_y': pos_y,
-                'siz_x': siz_x,
-                'siz_y': siz_y
-            }
-            sprites.append(sprite)
-
-        dic = dict()
-        dic['bombs'] = bombs
-        dic['lives'] = lives
-        dic['score'] = score
-        dic['sprites'] = sprites
-
-        return observation_from_dict(dic)
-
-    def contains(self, observation):
-        """
-        Tests if an observation is contained in DoDonPachi's observation space
-        and returns True iff it is. The criteria to be considered contained
-        are:
-
-            - Be a tuple
-            - Be of length `OBSERVATION_DIMENSION`
-            - Follow the observation layout described by `observation_from_dict`
-            - Bomb count >= 0 and < `max_bombs`
-            - Live count >= 0 and < `max_lives`
-            - Score >= 0 and < `max_score`
-            - Each sprite's properties must follow:
-                - `sid` >= 0 and < 2 ** 32
-                - `pos_x` and `pos_y` >= 0 and < `max_pos`
-                - `siz_x` and `siz_y` >= 0 and < `max_siz`
-        """
-
-        if not isinstance(observation, tuple):
-            return False
-
-        if len(observation) != OBSERVATION_DIMENSION:
-            return False
-
-        bombs = observation[0]
-        if bombs < 0 or bombs > self.max_bombs:
-            return False
-
-        lives = observation[1]
-        if lives < 0 or lives > self.max_lives:
-            return False
-
-        score = observation[2]
-        if score < 0 or score > self.max_score:
-            return False
-
-        okay = True
-
-        sprites = observation[3:]
-        for idx in range(0, SPRITE_COUNT * 5, 5):
-            sid, pos_x, pos_y, siz_x, siz_y = sprites[idx:idx+5]
-
-            if sid < 0 or sid >= 2 ** 32:
-                okay = False
-                break
-
-            if pos_x < 0 or pos_x > self.max_pos:
-                okay = False
-                break
-
-            if pos_y < 0 or pos_y > self.max_pos:
-                okay = False
-                break
-
-            if siz_x < 0 or siz_x > self.max_siz:
-                okay = False
-                break
-
-            if siz_y < 0 or siz_y > self.max_siz:
-                okay = False
-                break
-
-        return okay
+        self.shape = INPUT_SHAPE
 
 
-def render_plugin(plugin_name, lua_name, json_name, **options):
+def get_plugin_path():
     """
-    Renders a MAME plugin from the templates in the directory identified by the
-    given plugin_name. For the lua code, the template with the name lua_name
-    will be used and for the json-properties, the template json_name will be
-    used. The templates will be rendered using the given **options as values.
-
-    The resulting lua and json code is returned as a tuple (lua, json).
-    """
-    lua_name = os.path.join(plugin_name, lua_name)
-    json_name = os.path.join(plugin_name, json_name)
-
-    template_env = Environment(loader=FileSystemLoader('dodonbotchi/plugin'))
-    template_lua = template_env.get_template(lua_name)
-    template_json = template_env.get_template(json_name)
-
-    options['plugin_name'] = plugin_name
-
-    lua_code = template_lua.render(**options)
-    json_code = template_json.render(**options)
-
-    return lua_code, json_code
-
-
-def render_ipc_plugin():
-    """
-    Renders the IPC plugin used to communicate with MAME using configuration
-    values from the global config. The rendered code is returned as a (lua,
-    json) tuple.
-    """
-    opts = {
-        'host': cfg.host,
-        'port': cfg.port,
-        'show_sprites': cfg.show_sprites,
-        'tick_rate': cfg.tick_rate,
-        'snap_rate': cfg.snap_rate
-    }
-
-    return render_plugin(PLUGIN_IPC, TEMPLATE_LUA, TEMPLATE_JSON, **opts)
-
-
-def render_rec_plugin():
-    """
-    Renders the recording display plugin used to display information while
-    rendering out recordings of AI trials. The rendered code is returned as a
-    (lua, json) tuple.
-    """
-    opts = {}
-    return render_plugin(PLUGIN_REC, TEMPLATE_LUA, TEMPLATE_JSON, **opts)
-
-
-def get_plugin_path(plugin_name):
-    """
-    Gets the target directory to save a plugin of the given name to, using the
+    Gets the target directory to save the dodonbotchi plugin to relevant to the
     MAME home directory specified in the global config.
     """
     plugin_path = cfg.mame_path
     plugin_path = os.path.join(plugin_path, 'plugins')
-    plugin_path = os.path.join(plugin_path, plugin_name)
+    plugin_path = os.path.join(plugin_path, PLUGIN_NAME)
     return plugin_path
 
 
-def write_plugin(plugin_name, lua_code, json_code):
+def write_plugin(**options):
     """
-    Saves a plugin of the given name using the given lua code and json
-    properties to the MAME home directory specified in the global config.
+    Renders the templates for the code of the dodonbotchi plugin and writes it
+    to the appropriate plugin directory.
     """
-    plugin_path = get_plugin_path(plugin_name)
-    if not os.path.exists(plugin_path):
-        os.makedirs(plugin_path)
+    plugin_path = get_plugin_path()
+    ensure_directories(plugin_path)
 
-    lua_file = TEMPLATE_LUA
-    lua_file = os.path.join(plugin_path, lua_file)
-    with open(lua_file, 'w') as out_file:
-        out_file.write(lua_code)
+    templates_path = os.path.join('dodonbotchi/plugin', PLUGIN_NAME)
+    templates_env = Environment(loader=FileSystemLoader(templates_path))
 
-    json_file = TEMPLATE_JSON
-    json_file = os.path.join(plugin_path, json_file)
-    with open(json_file, 'w') as out_file:
-        out_file.write(json_code)
+    for template_name in os.listdir(templates_path):
+        template_path = os.path.join(templates_path, template_name)
+        if os.path.isfile(template_path):
+            template = templates_env.get_template(template_name)
+            rendered = template.render(plugin_name=PLUGIN_NAME, **options)
 
-
-def write_ipc_plugin():
-    """
-    Renders and saves the IPC plugin to the MAME home directory specified in
-    the global config.
-    """
-    lua_code, json_code = render_ipc_plugin()
-    write_plugin(PLUGIN_IPC, lua_code, json_code)
-
-
-def write_rec_plugin():
-    """
-    Renders and saves the recording display plugin to the MAME home directory
-    specified in the global config.
-    """
-    lua_code, json_code = render_rec_plugin()
-    write_plugin(PLUGIN_REC, lua_code, json_code)
-
+            template_target = os.path.join(plugin_path, template_name)
+            with open(template_target, 'w') as out_file:
+                out_file.write(rendered)
 
 
 def generate_base_call():
@@ -423,7 +391,7 @@ def generate_base_call():
     configuration. The list gets returned and can be customised by appending
     further options.
     """
-    call = ['mame', 'ddonpach', '-skip_gameinfo']
+    call = ['mame', 'ddonpach', '-skip_gameinfo', '-pause_brightness', '1']
 
     if cfg.windowed:
         call.append('-window')
@@ -447,12 +415,17 @@ def generate_base_call():
 
 
 def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
-    write_rec_plugin()
+    """
+    Plays back input file at the given path recording it as a video to the
+    given .avi file path. Optionally, recording and capture directories can be
+    overridden using `inp_dir` and `snp_dir`.
+    """
+    write_plugin(mode='record', **cfg)
 
     call = generate_base_call()
 
     call.append('-plugin')
-    call.append(PLUGIN_REC)
+    call.append(PLUGIN_NAME)
 
     if inp_dir:
         call.append('-input_directory')
@@ -483,45 +456,41 @@ class DoDonPachiEnv(Env):
     """
 
     def __init__(self, seed=None):
-        self.reward_range = (-1, 99999999)
+        self.reward_range = (-1, 1)
         self.action_space = DoDonPachiActions(seed)
         self.observation_space = DoDonPachiObservations(seed)
 
+        self.obs_count = 0
+
         self.inp_dir = None
         self.snp_dir = None
-
-        self.recording = None
 
         self.process = None
         self.server = None
         self.client = None
         self.sfile = None
 
+        self.current_frame = 0
         self.current_lives = 0
         self.current_score = 0
+        self.current_bombs = 0
+        self.current_combo = 0
+        self.current_hit = 0
+        self.reward_sum = 0
+        self.current_observation = None
+        self.current_grade = 1.0
+        self.current_reward = 0
+        self.max_hit = -1
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((cfg.host, cfg.port))
         self.server.listen()
         log.info('Started socket server on %s:%s', cfg.host, cfg.port)
 
-        write_ipc_plugin()
+        write_plugin(mode='bot', **cfg)
 
-    def configure(self, **options):
-        """
-        Configures this environment. Expected options are:
-            inp_dir: Directory to save .inp recordings to
-            snp_dir: Directory to save snapshots to
-        """
-        if 'inp_dir' not in options:
-            raise ValueError('Config needs to specify inp_dir.')
-        self.inp_dir = options.get('inp_dir')
-
-        if 'snp_dir' not in options:
-            raise ValueError('Config needs to specify snp_dir.')
-        self.snp_dir = options.get('snp_dir')
-
-        ensure_directories(self.inp_dir, self.snp_dir)
+    def configure(self, *args, **options):
+        pass
 
     def seed(self, seed=None):
         """
@@ -535,6 +504,7 @@ class DoDonPachiEnv(Env):
         Sends a message to the client, terminated by a newline.
         """
         self.sfile.write('{}\n'.format(message))
+        self.sfile.flush()
 
     def send_command(self, command, **options):
         """
@@ -563,37 +533,68 @@ class DoDonPachiEnv(Env):
         line = self.sfile.readline()
         return json.loads(line)
 
+    def dump_observation_frame(self, observation):
+        """
+        Retrieves the most recently saved snapshot of DoDonPachi, appends the
+        artificial observation frame to its right and overwrites that file.
+        """
+        dump = Image.new('RGB', (IMG_WIDTH * 2, IMG_HEIGHT), COLOUR_BACKGROUND)
+
+        snapshots = os.path.join(self.snp_dir, 'ddonpach')
+
+        if os.path.exists(snapshots):
+            snapshot_file = sorted(os.listdir(snapshots))[-1]
+            snapshot_path = os.path.join(snapshots, snapshot_file)
+            snapshot = Image.open(snapshot_path)
+            dump.paste(snapshot, (0, 0))
+
+            observation = observation.resize((IMG_WIDTH, IMG_HEIGHT))
+            dump.paste(observation, (IMG_WIDTH, 0))
+
+            dump.save(snapshot_path, 'PNG')
+
     def read_observation(self):
         """
-        Reads an observation from the client, ensuring it's a member of our
-        observation space and converting it to a tuple as described in
-        `observation_from_dict` before returning it.
+        Reads an observation from the client and renders an artificial frame
+        containing the objects described in the observation. The image is
+        returned as a numpy array alongside the observation dictionary
+        originally sent by the client.
         """
         message = self.read_message()
-        assert 'message' in message and message['message'] == 'observation'
         observation_dic = message['observation']
-        observation = observation_from_dict(observation_dic)
-        assert self.observation_space.contains(observation)
-        return observation
+        self.current_frame = observation_dic['frame']
+
+        img = observation_to_image(observation_dic)
+
+        if cfg.dump_frames:
+            self.dump_observation_frame(img)
+
+        arr = np.array(img)
+        arr = np.reshape(arr, self.observation_space.shape)
+
+        self.obs_count += 1
+
+        assert arr.shape == self.observation_space.shape
+
+        return arr, observation_dic
 
     def start_mame(self):
         """
         Boots up MAME with the globally configured options and additionally
-        setting it to record inputs and screenshots to this environment's
-        respective folders for those.
+        setting it to record inputs this environment's respective folders for
+        those.
         """
         call = generate_base_call()
         call.append('-plugin')
-        call.append(PLUGIN_IPC)
+        call.append(PLUGIN_NAME)
 
         abs_inp_dir = os.path.abspath(self.inp_dir)
         call.append('-input_directory')
         call.append(abs_inp_dir)
         call.append('-record')
-        call.append(self.recording)
+        call.append(RECORDING_FILE)
 
-        abs_snp_dir = os.path.join(self.snp_dir, get_now_string())
-        abs_snp_dir = os.path.abspath(abs_snp_dir)
+        abs_snp_dir = os.path.abspath(self.snp_dir)
         call.append('-snapshot_directory')
         call.append(abs_snp_dir)
 
@@ -602,7 +603,7 @@ class DoDonPachiEnv(Env):
         log.info('Waiting for MAME to connect...')
 
         self.client, addr = self.server.accept()
-        self.sfile = self.client.makefile(mode='rw', buffering=True)
+        self.sfile = self.client.makefile(mode='rw')
         log.info('Accepted client from: %s', addr)
 
     def stop_mame(self):
@@ -656,41 +657,77 @@ class DoDonPachiEnv(Env):
         log.debug('Performing DoDonBotchi action: %s', action)
         self.send_action(action)
         log.debug('Action sent. Waiting for observation...')
-        observation = self.read_observation()
+        observation, observation_dic = self.read_observation()
 
-        lives = observation[1]
-        score = observation[2]
+        grade = grade_observation(observation_dic)
+        reward = self.current_grade - grade
+
+        self.reward_sum += reward
+
+        lives = observation_dic['lives']
+        score = observation_dic['score']
+        combo = observation_dic['combo']
+        bombs = observation_dic['bombs']
+        hit = observation_dic['hit']
+
+        score_difference = score - self.current_score
+        score_difference += 1  # Ensure we don't 0 out the reward
+
+        log.info('Got step reward: %s', reward)
 
         if lives < self.current_lives:
             reward = -1
-        else:
-            reward = score - self.current_score
 
-        done = lives == 0
+        done = lives == 2
 
         self.current_lives = lives
         self.current_score = score
+        self.current_combo = combo
+        self.current_bombs = bombs
+        self.current_hit = hit
+        self.current_observation = observation_dic
+        self.current_reward = reward
+        self.current_grade = grade
+
+        if self.current_hit > self.max_hit:
+            self.max_hit = self.current_hit
 
         return observation, reward, done, {}
+
+    def reset_stats(self):
+        self.current_frame = 0
+        self.current_lives = 0
+        self.current_score = 0
+        self.current_bombs = 0
+        self.current_combo = 0
+        self.current_grade = 1
+        self.current_reward = 0
+        self.current_hit = 0
+        self.reward_sum = 0
+        self.max_hit = -1
 
     def reset(self):
         """
         Resets MAME and DoDonPachi to start from scratch. The initial
         observation immediately after starting the game is returned.
         """
-        self.current_lives = 0
-        self.current_score = 0
+        self.current_observation = None
 
-        self.recording = '{}.inp'.format(get_now_string())
+        ensure_directories(self.inp_dir, self.snp_dir)
 
         if self.process:
             self.stop_mame()
 
         self.start_mame()
 
-        observation = self.read_observation()
-        self.current_lives = observation[0]
-        self.current_score = observation[2]
+        observation, observation_dic = self.read_observation()
+
+        self.current_lives = observation_dic['lives']
+        self.current_score = observation_dic['score']
+        self.current_combo = observation_dic['combo']
+        self.current_bombs = observation_dic['bombs']
+        self.current_hit = observation_dic['hit']
+
         return observation
 
     def render(self, mode='human', close=False):

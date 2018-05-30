@@ -3,6 +3,7 @@ Module containing various helper functions used throughout DoDonBotchi.
 """
 import os
 import os.path
+import time
 
 from datetime import datetime
 
@@ -58,12 +59,5 @@ def generate_now_serial_number():
     Generates a sci-fi-mecha-like serial number based on the current date and
     time and returns it.
     """
-    now = datetime.now()
-
-    num = 0
-    num += now.hour
-    num += now.day * 24
-    num += now.month * 31 * 24
-    num += (now.year - YEAR_BASE) * 12 * 31 * 24
-
-    return generate_serial_number(num)
+    now = int(time.time())
+    return generate_serial_number(now)

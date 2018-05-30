@@ -8,7 +8,7 @@ import os
 import os.path
 
 from keras.models import Sequential
-from keras.layers import Dense, Activation, Flatten
+from keras.layers import Dense, Activation, Flatten, Permute, Convolution2D
 from keras.optimizers import Adam
 
 from rl.agents.cem import CEMAgent
@@ -26,94 +26,95 @@ from dodonbotchi.util import get_now_string, generate_now_serial_number
 from dodonbotchi.util import ensure_directories
 
 
-REC_DIR = 'recordings'
-CAP_DIR = 'captures'
+EPS_DIR = 'episodes'
 
 BRAIN_FILE = 'brain.h5f'
-LEADERBOARD_FILE = 'leaderboard.json'
+PROPS_FILE = 'exy.json'
+STATS_FILE = 'stats.csv'
+
+SNAP_DIR = 'snap'
+
+MEMORY_WINDOW = 4
+STEPS = 1000000000
 
 
-def create_model(actions, observations):
+def get_snap_dir(ep_dir):
+    return os.path.join(ep_dir, SNAP_DIR)
+
+
+def get_stats_file(ep_dir):
+    return os.path.join(ep_dir, STATS_FILE)
+
+
+def generate_episode_serial(ep_num):
+    serial = generate_now_serial_number()
+    serial = '{:08} - {}'.format(ep_num, serial)
+    return serial
+
+
+def create_model(actions, input_shape):
     """
-    Creates the neural network model using the given observation and action
-    dimensions and returns it alongside the number of nodes in the network.
-    """
-    num = 256 + 512 + 512 + actions + observations
+    Creates the neural network model outputting any of the given amount of
+    actions and observing inputs of the given shape.
 
+    This function returns the neural net as an uncompiled keras model.
+    """
     model = Sequential()
-    model.add(Flatten(input_shape=(5, observations)))
-    model.add(Dense(256))
+    model.add(Permute((2, 3, 1), input_shape=input_shape))
+    model.add(Convolution2D(32, (8, 8), subsample=(4, 4)))
     model.add(Activation('relu'))
-    model.add(Dense(512))
+    model.add(Convolution2D(64, (4, 4), subsample=(2, 2)))
     model.add(Activation('relu'))
+    model.add(Convolution2D(64, (3, 3), subsample=(1, 1)))
+    model.add(Activation('relu'))
+    model.add(Flatten())
     model.add(Dense(512))
     model.add(Activation('relu'))
     model.add(Dense(actions))
-    model.add(Activation('softmax'))
+    model.add(Activation('linear'))
 
     log.info('Created neural network model: ')
     log.info(model.summary())
 
-    return model, num
+    return model
 
 
 def create_memory():
     """
-    Creates a memory instance to be used by a learning agent and returns it
-    alongside a memory model type to identify it.
+    Creates a memory instance to be used by a learning agent and returns it.
     """
-    memory = SequentialMemory(limit=100000, window_length=5)
-    return memory, 'S'
+    memory = SequentialMemory(limit=100000, window_length=MEMORY_WINDOW)
+    log.debug('Created reinforcement learning memory.')
+    return memory
 
 
 def create_policy():
     """
-    Creates a policy instance to be used by a learning agent and returns it
-    alongside a policy model type to identify it.
+    Creates a policy instance to be used by a learning agent and returns it.
     """
     policy = EpsGreedyQPolicy()
     policy = LinearAnnealedPolicy(policy, attr='eps', value_max=1.0,
                                   value_min=0.1, value_test=0.05,
-                                  nb_steps=10000000)
-    return policy, 'LAeg'
+                                  nb_steps=STEPS)
+    log.debug('Created reinforcement learning policy.')
+    return policy
 
 
-def create_agent(actions, observations):
+def create_agent(actions, input_shape):
     """
     Creates the reinforcement learning agent used by EXY, with an underlying
     neural network using the given observation and action dimensions.
-
-    The agent is returned along with a serial number identifying it.
     """
-    model, nodes = create_model(actions, observations)
-    memory, mem_type = create_memory()
-    policy, pol_type = create_policy()
+    input_shape = (MEMORY_WINDOW,) + input_shape
+    model = create_model(actions, input_shape)
+    memory = create_memory()
+    policy = create_policy()
 
     agent = DQNAgent(model=model, memory=memory, policy=policy,
-                     nb_actions=actions, nb_steps_warmup=500)
+                     nb_actions=actions, nb_steps_warmup=5000)
     agent.compile(Adam(lr=.00025), metrics=['mae'])
-
-    mem_map = {'S': '13', 'E': '9K'}
-    mem_type = mem_map[mem_type]
-
-    serial = '{}{}-{}-{:03}'.format('DQN', mem_type, pol_type, nodes % 1000)
-    return agent, serial
-
-
-def get_recording_dir(exy_dir):
-    return os.path.join(exy_dir, REC_DIR)
-
-
-def get_capture_dir(exy_dir):
-    return os.path.join(exy_dir, CAP_DIR)
-
-
-def get_brain_file(exy_dir):
-    return os.path.join(exy_dir, BRAIN_FILE)
-
-
-def get_leaderboard_file(exy_dir):
-    return os.path.join(exy_dir, LEADERBOARD_FILE)
+    log.debug('Created reinforcement learning agent.')
+    return agent
 
 
 class EXY(Callback):
@@ -126,62 +127,182 @@ class EXY(Callback):
 
     If the directory already contains a brain file named as defined in
     `BRAIN_FILE`, the current state of the brain will be loaded for further
-    training.
+    training. Similarly, a properties file `PROPS_FILE` will be read to resume
+    EXY's state from where it was left off.
     """
 
     def __init__(self, exy_dir):
         self.exy_dir = exy_dir
 
-        self.brain_file = get_brain_file(self.exy_dir)
-
-        self.agent = None
-        self.serial = None
-
-        self.inp_dir = None
-        self.snp_dir = None
-
         self.env = None
+
+        self.episode_num = 0
+        self.episode_ser = None
         self.leaderboard = []
-        self.leaderboard_file = get_leaderboard_file(self.exy_dir)
-        if os.path.exists(self.leaderboard_file):
-            with open(self.leaderboard_file, 'r') as in_file:
-                leaderboard_text = in_file.read()
-                leaderboard_json = json.loads(leaderboard_text)
-                self.leaderboard = leaderboard_json['leaderboard']
+
+        self.current_stats = None
+
+    def get_brain_file(self):
+        """Returns the path to the brain file of this EXY instance."""
+        return os.path.join(self.exy_dir, BRAIN_FILE)
+
+    def get_props_file(self):
+        """Returns the path to the properties file of this EXY instance."""
+        return os.path.join(self.exy_dir, PROPS_FILE)
+
+    def get_episodes_dir(self):
+        """Returns the path to the episodes directory of this EXY instance."""
+        return os.path.join(self.exy_dir, EPS_DIR)
+
+    def get_episode_dir(self, ep_ser):
+        """
+        Returns the path to the episode directory of the given serial number in
+        this EXY instance.
+        """
+        episodes = self.get_episodes_dir()
+        path = os.path.join(episodes, ep_ser)
+        return path
+
+    def load_properties(self):
+        """
+        Loads previously saved EXY properties from the properties file in this
+        EXY instance's working directory. If no such file exists, nothing
+        happens.
+        """
+        props_file = self.get_props_file()
+        if not os.path.exists(props_file):
+            return
+
+        with open(props_file, 'r') as in_file:
+            props_str = in_file.read()
+            props_dic = json.loads(props_str)
+
+            self.episode_num = props_dic['episode_num']
+            self.leaderboard = props_dic['leaderboard']
+            log.debug('Loaded EXY properties from: %s', props_file)
+
+    def save_properties(self):
+        """
+        Saves this EXY instance's properties to a properties file in this
+        instance's working directory. An existing file would be overwritten.
+        """
+        props_file = self.get_props_file()
+        with open(props_file, 'w') as out_file:
+            props_dic = dict()
+            props_dic['episode_num'] = self.episode_num
+            props_dic['leaderboard'] = self.leaderboard
+            props_str = json.dumps(props_dic, indent=4)
+
+            out_file.write(props_str)
+            log.debug('Saved EXY properties to: %s', props_file)
+
+    def load_brain(self, agent):
+        """
+        Loads weights from a previously saved brain file into the given agent.
+        The function looks for the file in this EXY instance's working
+        directory. If no file is found, nothing happens.
+        """
+        brain_file = self.get_brain_file()
+        if not os.path.exists(brain_file):
+            return
+
+        agent.load_weights(brain_file)
+        log.debug('Loaded brain from: %s', brain_file)
+
+    def save_brain(self, agent):
+        """
+        Saves the given agent's weights to a brain file in this EXY instance's
+        working directory.
+        """
+        brain_file = self.get_brain_file()
+        agent.save_weights(brain_file, overwrite=True)
+        log.debug('Saved brain to: %s', brain_file)
+
+    def setup_next_episode(self):
+        """
+        Sets up the next episode to be executed by creating required
+        directories in the EXY working directory. The episode counter is
+        increased and the `current_stats` file to write to updated
+        accordingly.
+        """
+        self.episode_num += 1
+        self.episode_ser = generate_episode_serial(self.episode_num)
+        log.debug('Starting new episode: %s', self.episode_ser)
+
+        ep_dir = self.get_episode_dir(self.episode_ser)
+        snap_dir = get_snap_dir(ep_dir)
+        ensure_directories(ep_dir, snap_dir)
+
+        self.env.inp_dir = ep_dir
+        self.env.snp_dir = snap_dir
+
+        self.current_stats = get_stats_file(ep_dir)
 
     def setup(self):
         """
         Setups up the agent instance and output directories based on the given
         environment.
         """
-        actions = self.env.action_space.count
-        observations = self.env.observation_space.dimension
+        actions = self.env.action_space.shape[0]
+        input_shape = self.env.observation_space.shape
+        agent = create_agent(actions, input_shape)
 
-        self.agent, self.serial = create_agent(actions, observations)
+        ensure_directories(self.exy_dir)
 
-        self.inp_dir = get_recording_dir(self.exy_dir)
-        self.snp_dir = get_capture_dir(self.exy_dir)
+        self.load_brain(agent)
+        self.load_properties()
 
-        ensure_directories(self.exy_dir, self.inp_dir, self.snp_dir)
+        self.setup_next_episode()
 
-        if os.path.exists(self.brain_file):
-            self.agent.load_weights(self.brain_file)
+        return agent
 
-    def on_episode_end(self, episode, logs={}):
-        entry = {'inp': self.env.recording, 'score': self.env.current_score}
+    def on_step_end(self, step, logs=None):
+        """
+        Called after each step performed during training. Fetches various
+        statistics from the DoDonBotchi environment and writes them to the
+        current episode's stats file.
+        """
+        row = [
+            self.env.current_frame,
+            self.env.current_lives,
+            self.env.current_bombs,
+            self.env.current_score,
+            self.env.current_combo,
+            self.env.current_grade,
+            self.env.current_reward,
+            self.env.current_hit,
+            self.env.reward_sum,
+            len(self.env.current_observation['enemies']),
+            len(self.env.current_observation['bullets']),
+            len(self.env.current_observation['ownshot']),
+            len(self.env.current_observation['bonuses']),
+            len(self.env.current_observation['powerup'])
+        ]
+        row = [str(c) for c in row]
+        row = ';'.join(row)
+        log.debug('Got step statistics: %s', row)
+        row += '\n'
+
+        with open(self.current_stats, 'a') as out_file:
+            out_file.write(row)
+
+    def on_episode_end(self, episode, logs=None):
+        """
+        Called after each episode finishes. Fetches the last episode's score
+        and enters them into EXY's leaderboard, sorted by score.
+        """
+        entry = {'ep': self.episode_ser, 'score': self.env.current_score}
+        log.debug('Episode %s ended with score: %s', self.episode_ser,
+                  self.env.current_score)
         self.leaderboard.append(entry)
         self.leaderboard = sorted(self.leaderboard, key=lambda e: e['score'])
         self.leaderboard.reverse()
         if len(self.leaderboard) > 32:
             self.leaderboard = self.leaderboard[:32]
 
-        log.info('!!! Current run ended with score: {}'.format(
-            self.env.current_score))
-
-        with open(self.leaderboard_file, 'w') as out_file:
-            leaderboard_dict = {'leaderboard': self.leaderboard}
-            leaderboard_json = json.dumps(leaderboard_dict, indent=4)
-            out_file.write(leaderboard_json)
+        self.setup_next_episode()
+        self.save_properties()
+        log.debug('Finished an episode. Feel free to quit training with ^C.')
 
     def train(self):
         """
@@ -191,12 +312,11 @@ class EXY(Callback):
         current weights will be saved to EXY's brain file.
         """
         self.env = DoDonPachiEnv()
-        self.setup()
+        agent = self.setup()
+        log.info('Starting main training loop.')
         try:
-            self.env.configure(inp_dir=self.inp_dir, snp_dir=self.snp_dir)
             self.env.reset()
-            self.agent.fit(self.env, callbacks=[self],
-                           nb_steps=10000000000, verbose=2)
+            agent.fit(self.env, callbacks=[self], nb_steps=STEPS, verbose=2)
         finally:
             self.env.close()
-            self.agent.save_weights(self.brain_file, overwrite=True)
+            self.save_brain(agent)

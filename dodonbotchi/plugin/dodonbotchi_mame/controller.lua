@@ -1,13 +1,8 @@
-local json = require('json')
-
 local exports = {}
-exports.name = '{{plugin_name}}'
-exports.version = '0.1'
-exports.description = 'DoDonBotchi Recording display'
-exports.license = 'MIT'
-exports.author = {name = 'Signaltonsalat'}
 
-local botchi = exports
+local inputMap = {}
+local inputStates = {}
+local buttonStates = {}
 
 local bgColour = 0xFFBDBDD6
 local pressedColour = 0xFFFF0000
@@ -16,14 +11,9 @@ local unpressedColour = 0xFF000000
 local ctrlOriginX = 0
 local ctrlOriginY = 164
 
-local cpu = nil
-local mem = nil
-local screen = nil
+local tickRate = {{tick_rate}}
 
-local inputMap = {}
-local buttonStates = {}
-
-function initInputMap()
+function init()
     for tag, port in pairs(manager:machine():ioport().ports) do
         if port.fields['P1 Up'] then
             inputMap['U'] = {port = port, field = port.fields['P1 Up']}
@@ -73,15 +63,40 @@ function readButtonStates()
     readButtonState('3')
 end
 
-function startBotchi()
-    cpu = manager:machine().devices[':maincpu']
-    mem = cpu.spaces['program']
-    screen = manager:machine().screens[':screen']
+function updateInputStates()
+    for k, v in pairs(inputStates) do
+        if v == 1 then
+            inputMap[k].field:set_value(0)
+            inputStates[k] = 0
+        end
 
-    initInputMap()
+        if v == -1 then
+            inputMap[k].field:set_value(1)
+        end
+
+        if v > 1 then
+            inputMap[k].field:set_value(1)
+            inputStates[k] = inputStates[k] - 1
+        end
+    end
 end
 
-function displayBotchi()
+function startHold(button)
+    inputMap[button].field:set_value(1)
+    inputStates[button] = -1
+end
+
+function stopHold(button)
+    inputMap[button].field:set_value(0)
+    inputStates[button] = 0
+end
+
+function singlePress(button)
+    inputMap[button].field:set_value(1)
+    inputStates[button] = tickRate + 1
+end
+
+function render(screen)
     local btnColour
 
     readButtonStates()
@@ -131,9 +146,15 @@ function displayBotchi()
     screen:draw_box(ctrlOriginX + 6, ctrlOriginY + 30, ctrlOriginX + 10, ctrlOriginY + 34, btnColour, 0)
 end
 
-function botchi.startplugin()
-    emu.register_start(startBotchi)
-    emu.register_frame_done(displayBotchi)
-end
+exports.inputs = inputMap
+exports.states = buttonStates
+
+exports.init = init 
+exports.readButtonStates = readButtonStates
+exports.updateInputStates = updateInputStates
+exports.startHold = startHold
+exports.stopHold = stopHold
+exports.singlePress = singlePress
+exports.render = render
 
 return exports

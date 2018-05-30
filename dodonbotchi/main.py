@@ -18,12 +18,14 @@ import click
 
 from dodonbotchi import mame
 from dodonbotchi.config import ensure_config
-from dodonbotchi.exy import EXY, get_recording_dir, get_leaderboard_file
+from dodonbotchi.exy import EXY
+from dodonbotchi.mame import RECORDING_FILE
 from dodonbotchi.util import ensure_directories
 
 TIMESTAMP = datetime.now().isoformat().replace(':', '_')
-DEF_LOG = 'log/dodonbotchi_{}.log'.format(TIMESTAMP)
+DEF_LOG = 'log'
 DEF_CFG = 'dodonbotchi.cfg'
+LOG_FIL = 'dodonbotchi_{}.log'.format(TIMESTAMP)
 
 
 def log_exception(extype, value, trace):
@@ -34,15 +36,16 @@ def log_exception(extype, value, trace):
     log.exception('Uncaught exception: ', exc_info=(extype, value, trace))
 
 
-def setup_logging(log_file):
+def setup_logging(log_dir):
     """
     Sets up the logging framework to log to the given log_file and to STDOUT.
     If the path to the log_file does not exist, directories for it will be
     created.
     """
-    log_dir, _ = os.path.split(log_file)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+
+    log_file = os.path.join(log_dir, LOG_FIL)
 
     file_handler = log.FileHandler(log_file, 'w', 'utf-8')
     term_handler = log.StreamHandler()
@@ -58,14 +61,14 @@ def setup_logging(log_file):
 
 
 @click.group()
-@click.option('--log-file', type=click.Path(dir_okay=False), default=DEF_LOG)
+@click.option('--log-dir', type=click.Path(file_okay=False), default=DEF_LOG)
 @click.option('--cfg-file', type=click.Path(dir_okay=False), default=DEF_CFG)
-def cli(log_file=None, cfg_file=None):
+def cli(log_dir=None, cfg_file=None):
     """
     Click group that ensures at least log and configuration files are present,
     since the rest of the application uses those.
     """
-    setup_logging(log_file)
+    setup_logging(log_dir)
     ensure_config(cfg_file)
 
 
@@ -89,22 +92,27 @@ def render_all(exy_dir, video_file):
     Renders each episode of the EXY training at the given EXY dir into one
     (probably very long) video file. Might take ages.
     """
-    video_file = os.path.abspath(video_file)
     exy_dir = os.path.abspath(exy_dir)
-    inp_dir = get_recording_dir(exy_dir)
+    exy = EXY(exy_dir)
+
+    video_file = os.path.abspath(video_file)
+    inp_dir = exy.get_episodes_dir()
     snp_dir = os.path.join(exy_dir, '.tmp')
     ensure_directories(snp_dir)
 
     avi_files = []
-    for inp_file in sorted(os.listdir(inp_dir)):
-        base, ext = os.path.splitext(inp_file)
+    for episode in sorted(os.listdir(inp_dir)):
+        ep_dir = os.path.join(inp_dir, episode)
+        if not os.path.isdir(ep_dir):
+            continue
 
-        if ext == '.inp':
-            avi_file = base + '.avi'
-            mame.render_avi(inp_file, avi_file, inp_dir, snp_dir)
+        inp_file = os.path.join(episode, RECORDING_FILE)
 
-            avi_file = os.path.join(snp_dir, avi_file)
-            avi_files.append(avi_file)
+        avi_file = episode + '.avi'
+        mame.render_avi(inp_file, avi_file, inp_dir, snp_dir)
+
+        avi_file = os.path.join(snp_dir, avi_file)
+        avi_files.append(avi_file)
 
     list_file = os.path.join(snp_dir, 'avis.ls')
     with open(list_file, 'w') as out_file:
@@ -114,7 +122,7 @@ def render_all(exy_dir, video_file):
 
     call = ['ffmpeg', '-safe', '0', '-f', 'concat', '-i', list_file,
             '-c:v', 'libx264', '-crf', '11', '-c:a', 'aac', '-b:a', '192k',
-            '-vf', 'scale=480:640:flags=lanczos',
+            '-vf', 'scale=960:1280:flags=lanczos',
             video_file]
     subprocess.call(call)
     shutil.rmtree(snp_dir)
@@ -131,26 +139,25 @@ def render_leaderboard(amount, exy_dir, video_dir):
     to lowest. Videos will be temporarily stored in the EXY directory but
     finally rendered to the given video directory.
     """
-    video_dir = os.path.abspath(video_dir)
     exy_dir = os.path.abspath(exy_dir)
-    inp_dir = get_recording_dir(exy_dir)
+    exy = EXY(exy_dir)
+    exy.load_properties()
+
+    video_dir = os.path.abspath(video_dir)
+    inp_dir = exy.get_episodes_dir()
     snp_dir = os.path.join(exy_dir, '.tmp')
     ensure_directories(video_dir, snp_dir)
 
-    leaderboard_file = get_leaderboard_file(exy_dir)
-    with open(leaderboard_file, 'r') as in_file:
-        leaderboard_text = in_file.read()
-        leaderboard_json = json.loads(leaderboard_text)
-        leaderboard = leaderboard_json['leaderboard']
+    leaderboard = exy.leaderboard
 
     if len(leaderboard) > amount:
         leaderboard = leaderboard[:amount]
 
     for idx, entry in enumerate(leaderboard):
-        inp_file = entry['inp']
+        inp_file = os.path.join(entry['ep'], RECORDING_FILE)
         score = entry['score']
 
-        video_file = '{:03} - {:09}'.format(idx + 1, score)
+        video_file = '{:03} - {} - {:09}'.format(idx + 1, entry['ep'], score)
         avi_file = video_file + '.avi'
         mp4_file = video_file + '.mp4'
         mp4_file = os.path.join(video_dir, mp4_file)
@@ -161,7 +168,7 @@ def render_leaderboard(amount, exy_dir, video_dir):
         call = ['ffmpeg', '-i', avi_file,
                 '-c:v', 'libx264', '-crf', '11',
                 '-c:a', 'aac', '-b:a', '192k',
-                '-vf', 'scale=480:640:flags=lanczos',
+                '-vf', 'scale=960:1280:flags=lanczos',
                 mp4_file]
         subprocess.call(call)
 
