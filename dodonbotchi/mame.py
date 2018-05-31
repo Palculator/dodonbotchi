@@ -321,11 +321,11 @@ def observation_to_image(obs):
 
     draw_objects(draw, enemies, COLOUR_ENEMIES)
     draw_objects(draw, ownshot, COLOUR_OWNSHOT, 4)
+    draw_objects(draw, [ship_obj], COLOUR_SHIP)
     draw_objects(draw, bonuses, COLOUR_BONUSES, 4)
     draw_objects(draw, powerup, COLOUR_POWERUP)
     draw_objects(draw, bullets, COLOUR_BULLETS, 4)
 
-    draw_objects(draw, [ship_obj], COLOUR_SHIP)
 
     combo_width = int((obs['combo'] / MAX_COMBO) * OBS_WIDTH)
     if combo_width:
@@ -660,7 +660,7 @@ class DoDonPachiEnv(Env):
         observation, observation_dic = self.read_observation()
 
         grade = grade_observation(observation_dic)
-        reward = self.current_grade - grade
+        reward = grade - self.current_grade
 
         self.reward_sum += reward
 

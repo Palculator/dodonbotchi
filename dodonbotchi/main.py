@@ -170,7 +170,7 @@ def render_leaderboard(amount, exy_dir, video_dir):
                 '-c:a', 'aac', '-b:a', '192k',
                 '-vf', 'scale=960:1280:flags=lanczos',
                 mp4_file]
-        subprocess.call(call)
+        subprocess.call(call, shell=True)
 
     shutil.rmtree(snp_dir)
 

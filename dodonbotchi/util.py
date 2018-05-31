@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 SERIAL_LETTERS = 'DPRAEWZ5JNI7LB2UQCHKSOFGMVX3TY'
-YEAR_BASE = 2018
+YEAR_BASE = (2018 - 1970) * 365 * 24 * 60 * 60 # Seconds between 1970 and 2018
 
 
 def ensure_directories(*dirs):
@@ -59,5 +59,5 @@ def generate_now_serial_number():
     Generates a sci-fi-mecha-like serial number based on the current date and
     time and returns it.
     """
-    now = int(time.time())
+    now = int(time.time()) - YEAR_BASE
     return generate_serial_number(now)

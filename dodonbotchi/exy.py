@@ -112,7 +112,7 @@ def create_agent(actions, input_shape):
     policy = create_policy()
 
     agent = DQNAgent(model=model, memory=memory, policy=policy,
-                     nb_actions=actions, nb_steps_warmup=5000)
+                     nb_actions=actions, nb_steps_warmup=500)
     agent.compile(Adam(lr=.00025), metrics=['mae'])
     log.debug('Created reinforcement learning agent.')
     return agent
