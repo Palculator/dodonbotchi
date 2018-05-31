@@ -13,7 +13,7 @@ import logging as log
 import json
 import os
 
-MAME_PATH = os.path.expanduser('~/.mame/')
+MAME_PATH = os.path.expanduser('~/mame/')
 HOST = '127.0.0.1'
 PORT = 32512
 
@@ -24,6 +24,7 @@ NOTHROTTLE = False
 SAVE_STATE = None
 RENDER_SPRITES = "false"
 RENDER_STATE = "false"
+SHOW_INPUT = "true"
 DUMP_FRAMES = "false"
 TICK_RATE = 2
 SNAP_RATE = 100
@@ -93,6 +94,7 @@ def get_default():
         'save_state': SAVE_STATE,
         'render_sprites': RENDER_SPRITES,
         'render_state': RENDER_STATE,
+        'show_input': SHOW_INPUT,
         'dump_frames': DUMP_FRAMES,
         'tick_rate': TICK_RATE,
         'snap_rate': SNAP_RATE

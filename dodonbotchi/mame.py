@@ -598,7 +598,7 @@ class DoDonPachiEnv(Env):
         call.append('-snapshot_directory')
         call.append(abs_snp_dir)
 
-        self.process = subprocess.Popen(call)
+        self.process = subprocess.Popen(call, shell=True)
         log.info('Started MAME with dodonbotchi ipc & dodonpachi.')
         log.info('Waiting for MAME to connect...')
 

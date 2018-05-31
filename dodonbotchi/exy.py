@@ -31,11 +31,12 @@ EPS_DIR = 'episodes'
 BRAIN_FILE = 'brain.h5f'
 PROPS_FILE = 'exy.json'
 STATS_FILE = 'stats.csv'
+STOP_FILE = 'stop.pls'
 
 SNAP_DIR = 'snap'
 
 MEMORY_WINDOW = 4
-STEPS = 1000000000
+STEPS = 10000000
 
 
 def get_snap_dir(ep_dir):
@@ -163,6 +164,12 @@ class EXY(Callback):
         path = os.path.join(episodes, ep_ser)
         return path
 
+    def get_stop_file(self):
+        """
+        Returns the path to the file created when EXY is supposed to stop.
+        """
+        return os.path.join(self.exy_dir, STOP_FILE)
+
     def load_properties(self):
         """
         Loads previously saved EXY properties from the properties file in this
@@ -285,6 +292,14 @@ class EXY(Callback):
 
         with open(self.current_stats, 'a') as out_file:
             out_file.write(row)
+
+        # ^C on Windows doesn't quit keras-rl's agent. Instead, we expect the
+        # User to create a stop file and raise the KeyboardInterrupt
+        # manually.                   v_v
+        stop_file = self.get_stop_file()
+        if os.path.exists(stop_file):
+            os.remove(stop_file)
+            raise KeyboardInterrupt() # lol
 
     def on_episode_end(self, episode, logs=None):
         """
