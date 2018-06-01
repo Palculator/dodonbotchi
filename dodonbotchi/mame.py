@@ -22,6 +22,8 @@ from rl.core import Env, Space
 from dodonbotchi.config import CFG as cfg
 from dodonbotchi.util import ensure_directories
 
+SHELL = os.name == 'nt'
+
 RECORDING_FILE = 'recording.inp'
 
 IMG_WIDTH = 240
@@ -598,7 +600,7 @@ class DoDonPachiEnv(Env):
         call.append('-snapshot_directory')
         call.append(abs_snp_dir)
 
-        self.process = subprocess.Popen(call, shell=True)
+        self.process = subprocess.Popen(call, shell=SHELL)
         log.info('Started MAME with dodonbotchi ipc & dodonpachi.')
         log.info('Waiting for MAME to connect...')
 
@@ -662,8 +664,6 @@ class DoDonPachiEnv(Env):
         grade = grade_observation(observation_dic)
         reward = grade - self.current_grade
 
-        self.reward_sum += reward
-
         lives = observation_dic['lives']
         score = observation_dic['score']
         combo = observation_dic['combo']
@@ -691,6 +691,8 @@ class DoDonPachiEnv(Env):
 
         if self.current_hit > self.max_hit:
             self.max_hit = self.current_hit
+
+        self.reward_sum += reward
 
         return observation, reward, done, {}
 

@@ -86,6 +86,18 @@ def train(exy_dir):
 
 @cli.command()
 @click.argument('exy-dir', type=click.Path(file_okay=False))
+def plot(exy_dir):
+    """
+    Plots data from the stats files of each episode in the given EXY dir for
+    analysis. Plots are saved to disk in each episode folder and the EXY dir
+    itself.
+    """
+    exy = EXY(exy_dir)
+    exy.plot()
+
+
+@cli.command()
+@click.argument('exy-dir', type=click.Path(file_okay=False))
 @click.argument('video-file', type=click.Path(dir_okay=False))
 def render_all(exy_dir, video_file):
     """
