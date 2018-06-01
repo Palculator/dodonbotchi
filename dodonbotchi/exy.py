@@ -7,6 +7,10 @@ import logging as log
 import os
 import os.path
 
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 from keras.models import Sequential
 from keras.layers import Dense, Activation, Flatten, Permute, Convolution2D
 from keras.optimizers import Adam
@@ -335,3 +339,61 @@ class EXY(Callback):
         finally:
             self.env.close()
             self.save_brain(agent)
+
+    def plot_score_frame(self, plot_file, stats):
+        plt.figure()
+        plot = sns.lmplot(x='Frame', y='Score', data=stats,
+                          scatter_kws={'s': 8})
+        plot.savefig(plot_file, dpi=300)
+        log.info('Plotted: %s', plot_file)
+
+    def plot_grade_frame(self, plot_file, stats):
+        plt.figure()
+        plot = sns.lmplot(x='Frame', y='Grade', data=stats,
+                          scatter_kws={'s': 8})
+        plot.savefig(plot_file, dpi=300)
+        log.info('Plotted: %s', plot_file)
+
+    def plot_rewardsum_frame(self, plot_file, stats):
+        plt.figure()
+        plot = sns.lmplot(x='Frame', y='RewardSum', data=stats,
+                          scatter_kws={'s': 8})
+        plot.savefig(plot_file, dpi=300)
+        log.info('Plotted: %s', plot_file)
+
+    def plot(self):
+        episodes_dir = self.get_episodes_dir()
+        episodes = os.listdir(episodes_dir)
+        for episode in episodes:
+            episode_dir = os.path.join(episodes_dir, episode)
+            stats_file = get_stats_file(episode_dir)
+            with open(stats_file, 'r') as in_file:
+                stats = in_file.readlines()
+            stats = [s.split(';') for s in stats]
+
+            cols = [
+                'Frame',
+                'Lives',
+                'Bombs',
+                'Score',
+                'Combo',
+                'Grade',
+                'Reward',
+                'Hit',
+                'RewardSum',
+                'Enemies',
+                'Bullets',
+                'Ownshot',
+                'Bonuses',
+                'PowerUp'
+            ]
+
+            stats = pd.DataFrame(data=stats, columns=cols)
+            stats[cols] = stats[cols].apply(pd.to_numeric, axis=1)
+
+            score_frame = os.path.join(episode_dir, 'score_frame.png')
+            self.plot_score_frame(score_frame, stats)
+            grade_frame = os.path.join(episode_dir, 'grade_frame.png')
+            self.plot_grade_frame(grade_frame, stats)
+            rewardsum_frame = os.path.join(episode_dir, 'rewardsum_frame.png')
+            self.plot_rewardsum_frame(rewardsum_frame, stats)
