@@ -442,7 +442,7 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
     call.append('-aviwrite')
     call.append(avi_file)
 
-    return subprocess.call(call)
+    return subprocess.call(call, shell=True)
 
 
 class DoDonPachiEnv(Env):

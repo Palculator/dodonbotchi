@@ -36,6 +36,7 @@ STOP_FILE = 'stop.pls'
 SNAP_DIR = 'snap'
 
 MEMORY_WINDOW = 4
+WARMUP_INIT = 5000
 STEPS = 10000000
 
 
@@ -101,7 +102,7 @@ def create_policy():
     return policy
 
 
-def create_agent(actions, input_shape):
+def create_agent(warmup, actions, input_shape):
     """
     Creates the reinforcement learning agent used by EXY, with an underlying
     neural network using the given observation and action dimensions.
@@ -112,7 +113,7 @@ def create_agent(actions, input_shape):
     policy = create_policy()
 
     agent = DQNAgent(model=model, memory=memory, policy=policy,
-                     nb_actions=actions, nb_steps_warmup=500)
+                     nb_actions=actions, nb_steps_warmup=warmup)
     agent.compile(Adam(lr=.00025), metrics=['mae'])
     log.debug('Created reinforcement learning agent.')
     return agent
@@ -136,6 +137,8 @@ class EXY(Callback):
         self.exy_dir = exy_dir
 
         self.env = None
+
+        self.warmup = WARMUP_INIT
 
         self.episode_num = 0
         self.episode_ser = None
@@ -186,6 +189,7 @@ class EXY(Callback):
 
             self.episode_num = props_dic['episode_num']
             self.leaderboard = props_dic['leaderboard']
+            self.warmup = props_dic['warmup']
             log.debug('Loaded EXY properties from: %s', props_file)
 
     def save_properties(self):
@@ -198,6 +202,7 @@ class EXY(Callback):
             props_dic = dict()
             props_dic['episode_num'] = self.episode_num
             props_dic['leaderboard'] = self.leaderboard
+            props_dic['warmup'] = self.warmup
             props_str = json.dumps(props_dic, indent=4)
 
             out_file.write(props_str)
@@ -252,7 +257,7 @@ class EXY(Callback):
         """
         actions = self.env.action_space.shape[0]
         input_shape = self.env.observation_space.shape
-        agent = create_agent(actions, input_shape)
+        agent = create_agent(self.warmup, actions, input_shape)
 
         ensure_directories(self.exy_dir)
 
