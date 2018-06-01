@@ -12,7 +12,7 @@ import pandas as pd
 import seaborn as sns
 
 from keras.models import Sequential
-from keras.layers import Dense, Activation, Flatten, Permute, Convolution2D
+from keras.layers import Dense, Activation, Flatten, Permute, Convolution2D, TimeDistributed, LSTM
 from keras.optimizers import Adam
 
 from rl.agents.cem import CEMAgent
@@ -40,8 +40,26 @@ STOP_FILE = 'stop.pls'
 SNAP_DIR = 'snap'
 
 MEMORY_WINDOW = 4
-WARMUP_INIT = 5000
-STEPS = 10000000
+WARMUP_INIT = 100000
+STEPS = 100000000000
+
+COLS = [
+    'Episode',
+    'Frame',
+    'Lives',
+    'Bombs',
+    'Score',
+    'Combo',
+    'Grade',
+    'Reward',
+    'Hit',
+    'RewardSum',
+    'Enemies',
+    'Bullets',
+    'Ownshot',
+    'Bonuses',
+    'PowerUp'
+]
 
 
 def get_snap_dir(ep_dir):
@@ -65,19 +83,34 @@ def create_model(actions, input_shape):
 
     This function returns the neural net as an uncompiled keras model.
     """
+
     model = Sequential()
-    model.add(Permute((2, 3, 1), input_shape=input_shape))
-    model.add(Convolution2D(32, (8, 8), subsample=(4, 4)))
-    model.add(Activation('relu'))
-    model.add(Convolution2D(64, (4, 4), subsample=(2, 2)))
-    model.add(Activation('relu'))
-    model.add(Convolution2D(64, (3, 3), subsample=(1, 1)))
-    model.add(Activation('relu'))
-    model.add(Flatten())
-    model.add(Dense(512))
-    model.add(Activation('relu'))
-    model.add(Dense(actions))
-    model.add(Activation('linear'))
+    print(input_shape)
+    model.add(TimeDistributed(Convolution2D(64, (8, 8), strides=(4, 4), activation='relu'), input_shape=input_shape))
+    model.add(TimeDistributed(Convolution2D(128, (4, 4), strides=(2, 2), activation='relu')))
+    model.add(TimeDistributed(Convolution2D(128, (3, 3), activation='relu')))
+    model.add(TimeDistributed(Flatten()))
+
+    # Use all traces for training
+    #model.add(LSTM(512, return_sequences=True,  activation='tanh'))
+    #model.add(TimeDistributed(Dense(output_dim=action_size, activation='linear')))
+
+    model.add(LSTM(512,  activation='tanh'))
+    model.add(Dense(output_dim=actions, activation='linear'))
+
+    # model = Sequential()
+    # model.add(Permute((2, 3, 1), input_shape=input_shape))
+    # model.add(Convolution2D(32, (8, 8), subsample=(4, 4)))
+    # model.add(Activation('relu'))
+    # model.add(Convolution2D(64, (4, 4), subsample=(2, 2)))
+    # model.add(Activation('relu'))
+    # model.add(Convolution2D(64, (3, 3), subsample=(1, 1)))
+    # model.add(Activation('relu'))
+    # model.add(Flatten())
+    # model.add(Dense(512))
+    # model.add(Activation('relu'))
+    # model.add(Dense(actions))
+    # model.add(Activation('linear'))
 
     log.info('Created neural network model: ')
     log.info(model.summary())
@@ -99,9 +132,10 @@ def create_policy():
     Creates a policy instance to be used by a learning agent and returns it.
     """
     policy = EpsGreedyQPolicy()
-    policy = LinearAnnealedPolicy(policy, attr='eps', value_max=1.0,
+    policy = LinearAnnealedPolicy(policy, attr='eps', value_max=0.95,
                                   value_min=0.1, value_test=0.05,
-                                  nb_steps=STEPS)
+                                  nb_steps=STEPS // 100)
+    policy = BoltzmannQPolicy()
     log.debug('Created reinforcement learning policy.')
     return policy
 
@@ -118,7 +152,7 @@ def create_agent(warmup, actions, input_shape):
 
     agent = DQNAgent(model=model, memory=memory, policy=policy,
                      nb_actions=actions, nb_steps_warmup=warmup)
-    agent.compile(Adam(lr=.00025), metrics=['mae'])
+    agent.compile(Adam(), metrics=['mae'])
     log.debug('Created reinforcement learning agent.')
     return agent
 
@@ -279,6 +313,7 @@ class EXY(Callback):
         current episode's stats file.
         """
         row = [
+            self.episode_num,
             self.env.current_frame,
             self.env.current_lives,
             self.env.current_bombs,
@@ -345,60 +380,28 @@ class EXY(Callback):
             self.env.close()
             self.save_brain(agent)
 
-    def plot_score_frame(self, plot_file, stats):
-        plt.figure()
-        plot = sns.lmplot(x='Frame', y='Score', data=stats,
-                          scatter_kws={'s': 8})
+    def plot_lm(self, plot_file, stats, x, y):
+        plot = sns.lmplot(x=x, y=y, data=stats, palette='muted', scatter_kws={'s': 0.1})
         plot.savefig(plot_file, dpi=300)
         log.info('Plotted: %s', plot_file)
+        plt.close('all')
 
-    def plot_grade_frame(self, plot_file, stats):
-        plt.figure()
-        plot = sns.lmplot(x='Frame', y='Grade', data=stats,
-                          scatter_kws={'s': 8})
-        plot.savefig(plot_file, dpi=300)
-        log.info('Plotted: %s', plot_file)
+    def plot_overall(self):
+        overall = []
 
-    def plot_rewardsum_frame(self, plot_file, stats):
-        plt.figure()
-        plot = sns.lmplot(x='Frame', y='RewardSum', data=stats,
-                          scatter_kws={'s': 8})
-        plot.savefig(plot_file, dpi=300)
-        log.info('Plotted: %s', plot_file)
-
-    def plot(self):
         episodes_dir = self.get_episodes_dir()
-        episodes = os.listdir(episodes_dir)
+        episodes = sorted(os.listdir(episodes_dir))
         for episode in episodes:
             episode_dir = os.path.join(episodes_dir, episode)
             stats_file = get_stats_file(episode_dir)
             with open(stats_file, 'r') as in_file:
                 stats = in_file.readlines()
-            stats = [s.split(';') for s in stats]
+            stats = stats[-1]
+            stats = stats.split(';')
+            overall.append(stats)
 
-            cols = [
-                'Frame',
-                'Lives',
-                'Bombs',
-                'Score',
-                'Combo',
-                'Grade',
-                'Reward',
-                'Hit',
-                'RewardSum',
-                'Enemies',
-                'Bullets',
-                'Ownshot',
-                'Bonuses',
-                'PowerUp'
-            ]
+        stats = pd.DataFrame(data=overall, columns=COLS)
+        stats[COLS] = stats[COLS].apply(pd.to_numeric, axis=1)
 
-            stats = pd.DataFrame(data=stats, columns=cols)
-            stats[cols] = stats[cols].apply(pd.to_numeric, axis=1)
-
-            score_frame = os.path.join(episode_dir, 'score_frame.png')
-            self.plot_score_frame(score_frame, stats)
-            grade_frame = os.path.join(episode_dir, 'grade_frame.png')
-            self.plot_grade_frame(grade_frame, stats)
-            rewardsum_frame = os.path.join(episode_dir, 'rewardsum_frame.png')
-            self.plot_rewardsum_frame(rewardsum_frame, stats)
+        score_episode = os.path.join(self.exy_dir, 'score_episode.png')
+        self.plot_lm(score_episode, stats, 'Episode', 'Score')

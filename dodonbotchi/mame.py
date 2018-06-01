@@ -32,17 +32,17 @@ IMG_HEIGHT = 320
 OBS_SCALE = 4
 OBS_WIDTH = IMG_WIDTH // OBS_SCALE
 OBS_HEIGHT = IMG_HEIGHT // OBS_SCALE
-OBS_CHANNELS = 'L'
+OBS_CHANNELS = 'RGB'
 
 COLOUR_BACKGROUND = '#000000'
 
-COLOUR_ENEMIES = '#AAAAAA'
-COLOUR_BONUSES = '#444444'
-COLOUR_POWERUP = '#666666'
-COLOUR_BULLETS = '#DDDDDD'
-COLOUR_OWNSHOT = '#222222'
+COLOUR_ENEMIES = '#0000FF'
+COLOUR_BONUSES = '#FF00FF'
+COLOUR_POWERUP = '#FFFF00'
+COLOUR_BULLETS = '#FF0000'
+COLOUR_OWNSHOT = '#00FF00'
 
-COLOUR_COMBO = '#888888'
+COLOUR_COMBO = '#FF00FF'
 
 COLOUR_SHIP = '#FFFFFF'
 
@@ -52,7 +52,7 @@ MAX_COMBO = 0x37
 MAX_DISTANCE = 400  # Furthest distance two objects can have in 240x320
 COMBO_BAR_HEIGHT = 4
 
-INPUT_SHAPE = (OBS_WIDTH, OBS_HEIGHT)
+INPUT_SHAPE = (OBS_WIDTH, OBS_HEIGHT, len(OBS_CHANNELS))
 
 
 class DoDonPachiActions(Space):
@@ -662,7 +662,7 @@ class DoDonPachiEnv(Env):
         observation, observation_dic = self.read_observation()
 
         grade = grade_observation(observation_dic)
-        reward = grade - self.current_grade
+        #reward = grade - self.current_grade
 
         lives = observation_dic['lives']
         score = observation_dic['score']
@@ -673,10 +673,12 @@ class DoDonPachiEnv(Env):
         score_difference = score - self.current_score
         score_difference += 1  # Ensure we don't 0 out the reward
 
-        log.info('Got step reward: %s', reward)
+        reward = score - self.current_score
 
         if lives < self.current_lives:
             reward = -1
+
+        log.info('Got step reward: %s', reward)
 
         done = lives == 2
 
@@ -714,6 +716,8 @@ class DoDonPachiEnv(Env):
         observation immediately after starting the game is returned.
         """
         self.current_observation = None
+
+        self.reset_stats()
 
         ensure_directories(self.inp_dir, self.snp_dir)
 

@@ -93,7 +93,7 @@ def plot(exy_dir):
     itself.
     """
     exy = EXY(exy_dir)
-    exy.plot()
+    exy.plot_overall()
 
 
 @cli.command()
