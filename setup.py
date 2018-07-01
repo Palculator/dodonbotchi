@@ -36,6 +36,7 @@ setup(
         'tensorflow==1.8.0',
         'keras-rl==0.4.0',
         'iterfzf==0.4.0.17.3',
-        'seaborn==0.8.1'
+        'seaborn==0.8.1',
+        'shapely==1.6.4',
     ]
 )

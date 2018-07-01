@@ -109,4 +109,5 @@ tags
 
 log/
 *.log
+*.log.1
 *.cfg

@@ -24,6 +24,7 @@ NOTHROTTLE = False
 SAVE_STATE = None
 RENDER_SPRITES = "false"
 RENDER_STATE = "false"
+RENDER_RING = "false"
 SHOW_INPUT = "true"
 DUMP_FRAMES = "false"
 TICK_RATE = 2
@@ -94,10 +95,11 @@ def get_default():
         'save_state': SAVE_STATE,
         'render_sprites': RENDER_SPRITES,
         'render_state': RENDER_STATE,
+        'render_ring': RENDER_RING,
         'show_input': SHOW_INPUT,
         'dump_frames': DUMP_FRAMES,
         'tick_rate': TICK_RATE,
-        'snap_rate': SNAP_RATE
+        'snap_rate': SNAP_RATE,
     }
 
     default = Config()

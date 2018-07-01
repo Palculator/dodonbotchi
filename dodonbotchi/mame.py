@@ -2,7 +2,6 @@
 This module implements classes related to giving access to MAME and DoDonPachi
 as an OpenAI-Gym-like environment.
 """
-import copy
 import json
 import logging as log
 import math
@@ -16,7 +15,6 @@ from time import sleep
 import numpy as np
 
 from jinja2 import Environment, FileSystemLoader
-from PIL import Image, ImageDraw
 from rl.core import Env, Space
 
 from dodonbotchi.config import CFG as cfg
@@ -26,33 +24,14 @@ SHELL = os.name == 'nt'
 
 RECORDING_FILE = 'recording.inp'
 
-IMG_WIDTH = 240
-IMG_HEIGHT = 320
-
-OBS_SCALE = 4
-OBS_WIDTH = IMG_WIDTH // OBS_SCALE
-OBS_HEIGHT = IMG_HEIGHT // OBS_SCALE
-OBS_CHANNELS = 'RGB'
-
-COLOUR_BACKGROUND = '#000000'
-
-COLOUR_ENEMIES = '#0000FF'
-COLOUR_BONUSES = '#FF00FF'
-COLOUR_POWERUP = '#FFFF00'
-COLOUR_BULLETS = '#FF0000'
-COLOUR_OWNSHOT = '#00FF00'
-
-COLOUR_COMBO = '#FF00FF'
-
-COLOUR_SHIP = '#FFFFFF'
-
 PLUGIN_NAME = 'dodonbotchi_mame'
 
 MAX_COMBO = 0x37
 MAX_DISTANCE = 400  # Furthest distance two objects can have in 240x320
-COMBO_BAR_HEIGHT = 4
 
-INPUT_SHAPE = (OBS_WIDTH, OBS_HEIGHT, len(OBS_CHANNELS))
+
+def get_action_str(vert=0, hori=0, shot=0, bomb=0):
+    return f'{vert}{hori}{shot}{bomb}'
 
 
 class DoDonPachiActions(Space):
@@ -77,7 +56,7 @@ class DoDonPachiActions(Space):
 
     def __init__(self, seed=None):
         self.directions = 'VH'
-        self.buttons = '1'
+        self.buttons = '12'
         self.axis_states = '012'
         self.button_states = '01'
 
@@ -260,99 +239,6 @@ def grade_observation(obs):
     return reward
 
 
-def draw_objects(draw, objects, colour, scale=2):
-    """
-    Draws the given list of objects as boxes to the given ImageDraw object
-    using the given colour. Objects are expected to be dictionaries containing
-    their center position as `pos_x` and `pos_y` entries, and the object's size
-    as `siz_x` and `siz_y` entries.
-    """
-    for obj in objects:
-        off_x = obj['siz_x'] / scale
-        off_y = obj['siz_y'] / scale
-
-        min_x = OBS_HEIGHT - obj['pos_x'] - off_x
-        min_y = obj['pos_y'] - off_y
-        max_x = OBS_HEIGHT - obj['pos_x'] + off_x
-        max_y = obj['pos_y'] + off_y
-
-        draw.rectangle((min_y, min_x, max_y, max_x), fill=colour)
-
-
-def scale_objects(objects):
-    """
-    Scales the given list of objects down in-place, dividing their positions
-    and sizes by `OBS_SCALE`.
-    """
-    for obj in objects:
-        obj['pos_x'] = obj['pos_x'] // OBS_SCALE
-        obj['pos_y'] = obj['pos_y'] // OBS_SCALE
-        obj['siz_x'] = obj['siz_x'] // OBS_SCALE
-        obj['siz_y'] = obj['siz_y'] // OBS_SCALE
-
-
-def observation_to_image(obs):
-    """
-    Renders the given observation dictionary into an image that represents the
-    game state described in the observation. The resulting image is returned as
-    a pillow Image object.
-    """
-    obs = copy.deepcopy(obs)
-
-    img = Image.new(OBS_CHANNELS, (OBS_WIDTH, OBS_HEIGHT), COLOUR_BACKGROUND)
-    draw = ImageDraw.Draw(img)
-
-    enemies = obs['enemies']
-    bullets = obs['bullets']
-    ownshot = obs['ownshot']
-    powerup = obs['powerup']
-    bonuses = obs['bonuses']
-
-    scale_objects(enemies)
-    scale_objects(bullets)
-    scale_objects(ownshot)
-    scale_objects(powerup)
-    scale_objects(bonuses)
-
-    ship_obj = {
-        'pos_x': obs['ship']['x'] // OBS_SCALE,
-        'pos_y': obs['ship']['y'] // OBS_SCALE,
-        'siz_x': 16 // OBS_SCALE,
-        'siz_y': 16 // OBS_SCALE
-    }
-
-    draw_objects(draw, enemies, COLOUR_ENEMIES)
-    draw_objects(draw, ownshot, COLOUR_OWNSHOT, 4)
-    draw_objects(draw, [ship_obj], COLOUR_SHIP)
-    draw_objects(draw, bonuses, COLOUR_BONUSES, 4)
-    draw_objects(draw, powerup, COLOUR_POWERUP)
-    draw_objects(draw, bullets, COLOUR_BULLETS, 4)
-
-
-    combo_width = int((obs['combo'] / MAX_COMBO) * OBS_WIDTH)
-    if combo_width:
-        rect = (0, OBS_HEIGHT - COMBO_BAR_HEIGHT, combo_width, OBS_HEIGHT)
-        draw.rectangle(rect, fill=COLOUR_COMBO)
-
-    del draw
-
-    return img
-
-
-class DoDonPachiObservations(Space):
-    """
-    Defines the observation space for DoDonPachi. Observations are grayscale
-    images of size OBS_WIDTH x OBS_HEIGHT.
-    """
-
-    def __init__(self, seed=None):
-        self.rng = random.Random()
-        if seed:
-            self.rng.seed(seed)
-
-        self.shape = INPUT_SHAPE
-
-
 def get_plugin_path():
     """
     Gets the target directory to save the dodonbotchi plugin to relevant to the
@@ -447,7 +333,8 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
     return subprocess.call(call, shell=True)
 
 
-class DoDonPachiEnv(Env):
+class Ddonpach:
+    # class DoDonPachiEnv(Env):
     """
     Implements an OpenAI-Gym-like envirionment that starts and interfaces with
     MAME running DoDonPachi. The respective action and observation spaces are
@@ -458,12 +345,6 @@ class DoDonPachiEnv(Env):
     """
 
     def __init__(self, seed=None):
-        self.reward_range = (-1, 1)
-        self.action_space = DoDonPachiActions(seed)
-        self.observation_space = DoDonPachiObservations(seed)
-
-        self.obs_count = 0
-
         self.inp_dir = None
         self.snp_dir = None
 
@@ -471,18 +352,7 @@ class DoDonPachiEnv(Env):
         self.server = None
         self.client = None
         self.sfile = None
-
-        self.current_frame = 0
-        self.current_lives = 0
-        self.current_score = 0
-        self.current_bombs = 0
-        self.current_combo = 0
-        self.current_hit = 0
-        self.reward_sum = 0
-        self.current_observation = None
-        self.current_grade = 1.0
-        self.current_reward = 0
-        self.max_hit = -1
+        self.waiting = False
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((cfg.host, cfg.port))
@@ -491,22 +361,16 @@ class DoDonPachiEnv(Env):
 
         write_plugin(mode='bot', **cfg)
 
-    def configure(self, *args, **options):
-        pass
-
-    def seed(self, seed=None):
-        """
-        Stub because this environment has no random properties to control with
-        a seed.
-        """
-        return [seed]
-
     def send_message(self, message):
         """
         Sends a message to the client, terminated by a newline.
         """
+        if not self.waiting:
+            raise ValueError('Client is not waiting for new messages.')
+
         self.sfile.write('{}\n'.format(message))
         self.sfile.flush()
+        self.waiting = False
 
     def send_command(self, command, **options):
         """
@@ -532,28 +396,12 @@ class DoDonPachiEnv(Env):
         Reads a message from the client, expecting it to be in one line and a
         json object. The method returns the message parsed as a dictionary.
         """
+        if self.waiting:
+            raise ValueError('Client is waiting for a message.')
+
         line = self.sfile.readline()
+        self.waiting = True
         return json.loads(line)
-
-    def dump_observation_frame(self, observation):
-        """
-        Retrieves the most recently saved snapshot of DoDonPachi, appends the
-        artificial observation frame to its right and overwrites that file.
-        """
-        dump = Image.new('RGB', (IMG_WIDTH * 2, IMG_HEIGHT), COLOUR_BACKGROUND)
-
-        snapshots = os.path.join(self.snp_dir, 'ddonpach')
-
-        if os.path.exists(snapshots):
-            snapshot_file = sorted(os.listdir(snapshots))[-1]
-            snapshot_path = os.path.join(snapshots, snapshot_file)
-            snapshot = Image.open(snapshot_path)
-            dump.paste(snapshot, (0, 0))
-
-            observation = observation.resize((IMG_WIDTH, IMG_HEIGHT))
-            dump.paste(observation, (IMG_WIDTH, 0))
-
-            dump.save(snapshot_path, 'PNG')
 
     def read_observation(self):
         """
@@ -564,21 +412,8 @@ class DoDonPachiEnv(Env):
         """
         message = self.read_message()
         observation_dic = message['observation']
-        self.current_frame = observation_dic['frame']
 
-        img = observation_to_image(observation_dic)
-
-        if cfg.dump_frames:
-            self.dump_observation_frame(img)
-
-        arr = np.array(img)
-        arr = np.reshape(arr, self.observation_space.shape)
-
-        self.obs_count += 1
-
-        assert arr.shape == self.observation_space.shape
-
-        return arr, observation_dic
+        return observation_dic
 
     def start_mame(self):
         """
@@ -586,6 +421,8 @@ class DoDonPachiEnv(Env):
         setting it to record inputs this environment's respective folders for
         those.
         """
+        ensure_directories(self.inp_dir, self.snp_dir)
+
         call = generate_base_call()
         call.append('-plugin')
         call.append(PLUGIN_NAME)
@@ -614,8 +451,6 @@ class DoDonPachiEnv(Env):
         command, but killing the process manually if the client does not
         terminate on its own.
         """
-        assert self.process
-
         if self.client and self.sfile:
             self.send_command('kill')
 
@@ -641,100 +476,17 @@ class DoDonPachiEnv(Env):
         self.client = None
         self.sfile = None
 
-    def step(self, action):
-        """
-        Performs the given action in this environment. The action can either be
-        an integer representing an ordinal value in our action space, or a
-        string formatted as defined in DoDonPachiActions. The method returns a
-        tuple of (observation, reward, done, aux) representing the observation
-        after the action was performed, the reward gained from it, whether the
-        simulation is done, and auxiliary data to give additional and optional
-        info.
-        """
-        if isinstance(action, np.integer):
-            action = self.action_space.from_ordinal(action)
-        if not self.action_space.contains(action):
-            raise ValueError('Action not in action space: {}'.format(action))
-
-        log.debug('Performing DoDonBotchi action: %s', action)
-        self.send_action(action)
-        log.debug('Action sent. Waiting for observation...')
-        observation, observation_dic = self.read_observation()
-
-        grade = grade_observation(observation_dic)
-        #reward = grade - self.current_grade
-
-        lives = observation_dic['lives']
-        score = observation_dic['score']
-        combo = observation_dic['combo']
-        bombs = observation_dic['bombs']
-        hit = observation_dic['hit']
-
-        score_difference = score - self.current_score
-        score_difference += 1  # Ensure we don't 0 out the reward
+    def reward_step(self, action, observation):
+        lives = observation['lives']
+        score = observation['score']
 
         reward = score - self.current_score
-
-        if lives < self.current_lives:
-            reward = -1
-
-        log.info('Got step reward: %s', reward)
-
         done = lives == 2
 
-        self.current_lives = lives
-        self.current_score = score
-        self.current_combo = combo
-        self.current_bombs = bombs
-        self.current_hit = hit
-        self.current_observation = observation_dic
-        self.current_reward = reward
-        self.current_grade = grade
+        if done:
+            reward = -1
 
-        if self.current_hit > self.max_hit:
-            self.max_hit = self.current_hit
-
-        self.reward_sum += reward
-
-        return observation, reward, done, {}
-
-    def reset_stats(self):
-        self.current_frame = 0
-        self.current_lives = 0
-        self.current_score = 0
-        self.current_bombs = 0
-        self.current_combo = 0
-        self.current_grade = 1
-        self.current_reward = 0
-        self.current_hit = 0
-        self.reward_sum = 0
-        self.max_hit = -1
-
-    def reset(self):
-        """
-        Resets MAME and DoDonPachi to start from scratch. The initial
-        observation immediately after starting the game is returned.
-        """
-        self.current_observation = None
-
-        self.reset_stats()
-
-        ensure_directories(self.inp_dir, self.snp_dir)
-
-        if self.process:
-            self.stop_mame()
-
-        self.start_mame()
-
-        observation, observation_dic = self.read_observation()
-
-        self.current_lives = observation_dic['lives']
-        self.current_score = observation_dic['score']
-        self.current_combo = observation_dic['combo']
-        self.current_bombs = observation_dic['bombs']
-        self.current_hit = observation_dic['hit']
-
-        return observation
+        return reward, done, {}
 
     def render(self, mode='human', close=False):
         """
@@ -759,3 +511,129 @@ class DoDonPachiEnv(Env):
         self.server = None
         self.client = None
         self.sfile = None
+
+
+class DoDonPachiEnv(Env):
+    def __init__(self, ddonpach):
+        self.ddonpach = ddonpach
+        self.reward_range = (-1, 1)
+        self.action_space = DoDonPachiActions()
+
+        self.obs_count = 0
+
+        self.current_frame = 0
+        self.current_lives = 0
+        self.current_score = 0
+        self.current_bombs = 0
+        self.current_combo = 0
+        self.current_hit = 0
+        self.reward_sum = 0
+        self.current_observation = None
+        self.current_reward = 0
+        self.max_hit = -1
+
+        write_plugin(mode='bot', **cfg)
+
+    def configure(self, *args, **options):
+        pass
+
+    def seed(self, seed=None):
+        return [seed]
+
+    def step(self, action):
+        """
+        Performs the given action in this environment. The action can either be
+        an integer representing an ordinal value in our action space, or a
+        string formatted as defined in DoDonPachiActions. The method returns a
+        tuple of (observation, reward, done, aux) representing the observation
+        after the action was performed, the reward gained from it, whether the
+        simulation is done, and auxiliary data to give additional and optional
+        info.
+        """
+        if isinstance(action, np.integer):
+            action = self.action_space.from_ordinal(action)
+        if not self.action_space.contains(action):
+            raise ValueError('Action not in action space: {}'.format(action))
+
+        log.debug('Performing DoDonBotchi action: %s', action)
+        self.ddonpach.send_action(action)
+        log.debug('Action sent. Waiting for observation...')
+        observation = self.ddonpach.read_observation()
+        self.current_frame = observation['frame']
+
+        reward, done, aux = self.reward_step(action, observation)
+
+        log.info('Got step reward: %s', reward)
+
+        self.current_lives = observation['lives']
+        self.current_score = observation['score']
+        self.current_combo = observation['combo']
+        self.current_bombs = observation['bombs']
+        self.current_hit = observation['hit']
+        self.current_observation = observation
+
+        self.current_reward = reward
+
+        if self.current_hit > self.max_hit:
+            self.max_hit = self.current_hit
+
+        self.reward_sum += reward
+
+        return observation, reward, done, aux
+
+    def reward_step(self, action, observation):
+        lives = observation['lives']
+        score = observation['score']
+
+        reward = score - self.current_score
+        done = lives == 2
+
+        if done:
+            reward = -1
+
+        return reward, done, {}
+
+    def reset_stats(self):
+        self.current_frame = 0
+        self.current_lives = 0
+        self.current_score = 0
+        self.current_bombs = 0
+        self.current_combo = 0
+        self.current_reward = 0
+        self.current_hit = 0
+        self.reward_sum = 0
+        self.max_hit = -1
+
+    def reset(self):
+        """
+        Resets MAME and DoDonPachi to start from scratch. The initial
+        observation immediately after starting the game is returned.
+        """
+        self.current_observation = None
+
+        self.reset_stats()
+
+        self.ddonpach.stop_mame()
+        self.ddonpach.start_mame()
+
+        observation = self.ddonpach.read_observation()
+
+        self.current_lives = observation['lives']
+        self.current_score = observation['score']
+        self.current_combo = observation['combo']
+        self.current_bombs = observation['bombs']
+        self.current_hit = observation['hit']
+
+        return observation
+
+    def render(self, mode='human', close=False):
+        """
+        Meaningless function in our context, since rendering is turned off/on
+        in the global config that gets passed to MAME. Only implemented as part
+        of the Env interface.
+        """
+        # Kind of meaningless in our setup, so this method is empty.
+        pass
+
+    def close(self):
+        self.ddonpach.close()

@@ -9,112 +9,124 @@ local screen = nil
 
 local ctrl = nil
 local state = nil
-
-local socket = nil
-local connected = false
+local ipc = nil
 
 local tickRate = {{tick_rate}}
 local dumpFrames = {{dump_frames}}
+local renderRing = {{render_ring}}
 local sleepFrames = 15
 
 local currentState = {}
 
-function sendMessage(message)
-    socket:write(message .. '\n')
-end
+local shipX = 0
+local shipY = 0
+local enemiesRing = nil
+local bulletsRing = nil
 
 function produceSocketOutput()
     currentState = state.readGameState()
     local message = { message = 'observation', observation = currentState }
     message = json.stringify(message)
 
-    sendMessage(message)
-end
-
-function performDirection(state, posKey, negKey)
-    if state == '1' then
-        ctrl.stopHold(posKey)
-        ctrl.singlePress(negKey)
-    end
-
-    if state == '2' then
-        ctrl.stopHold(negKey)
-        ctrl.singlePress(posKey)
-    end
-end
-
-function performButton(state, key)
-    if state == '1' then
-        ctrl.singlePress(key)
-    end
-end
-
-function performAction(action)
-    local vertical = action:sub(1, 1)
-    performDirection(vertical, 'U', 'D')
-    local horizontal = action:sub(2, 2)
-    performDirection(horizontal, 'R', 'L')
-
-    local button1 = action:sub(3, 3)
-    performButton(button1, '1')
-    -- Bombs disabled for now because the AI is stupid.
-    -- local button2 = action:sub(4, 4)
-    -- performButton(button2, '2')
+    ipc.sendMessage(message)
 end
 
 function handleSocketInput()
-    local message = socket:read(1024)
+    local message = ipc.readMessage()
 
-    if message ~= nil and #message > 0 then
-        message = json.parse(message)
+    if message ~= nil then
         if message['command'] == 'kill' then
             manager:machine():exit()
         end
 
         if message['command'] == 'action' then
-            performAction(message['inputs'])
+            ctrl.performAction(message['inputs'])
             emu.unpause()
             sleepFrames = tickRate
+        end
+
+        if message['command'] == 'threat_ring' then
+            shipX = message['ship_x']
+            shipY = message['ship_y']
+            enemiesRing = message['enemies']
+            bulletsRing = message['bullets']
+            ipc.sendACK()
         end
     end
 end
 
 function update()
-    if connected then
-        if manager:machine().paused then
-            handleSocketInput()
-        end
+    if manager:machine().paused then
+        handleSocketInput()
+    end
 
-        if not manager:machine().paused then
-            ctrl.updateInputStates()
+    if not manager:machine().paused then
+        ctrl.updateInputStates()
 
-            if sleepFrames == 0 then
-                if dumpFrames then
-                    screen:snapshot()
-                end
-                produceSocketOutput()
-                emu.pause()
-            else
-                sleepFrames = sleepFrames - 1
+        if sleepFrames == 0 then
+            if dumpFrames then
+                screen:snapshot()
             end
+            produceSocketOutput()
+            emu.pause()
+        else
+            sleepFrames = sleepFrames - 1
         end
     end
 end
 
-function init(controller, gameState)
+function renderRing(ring, radius, red)
+    local segs = #ring
+    local step = 360 / segs
+    local start = -step/2.0
+
+    for i, v in ipairs(ring) do
+        local beg_angle = (i - 1) * step - (step / 2.0)
+        local end_angle = i * step - (step / 2.0)
+
+        beg_angle = math.rad(beg_angle)
+        end_angle = math.rad(end_angle)
+
+        beg_x = radius * math.cos(beg_angle) + shipX
+        beg_y = radius * math.sin(beg_angle) + shipY
+        end_x = radius * math.cos(end_angle) + shipX
+        end_y = radius * math.sin(end_angle) + shipY
+
+        local colour = 1.0 - math.min(1.0, v / 4.0)
+        colour = math.floor(255 * colour)
+
+        if red then
+            colour = 0xFFFF * 65536 + (colour * 256) + colour
+        else
+            colour = 0xFF * 16777216 + (colour * 65536) + (0xFF * 256) + colour
+        end
+
+        screen:draw_line(beg_x, beg_y, end_x, end_y, colour)
+    end
+end
+
+function render()
+    if enemiesRing then
+        renderRing(enemiesRing, 18, false)
+    end
+
+    if bulletsRing then
+        renderRing(bulletsRing, 22, true)
+    end
+end
+
+function init(controller, gameState, comm)
     ctrl = controller
     state = gameState
+    ipc = comm
 
     mem = manager:machine().devices[':maincpu'].spaces['program']
     screen = manager:machine().screens[':screen']
-
-    socket = emu.file('rw')
-    socket:open('socket.{{host}}:{{port}}')
-    connected = true
 
     emu.register_frame(update)
 end
 
 exports.init = init
+exports.render = render
 
 return exports

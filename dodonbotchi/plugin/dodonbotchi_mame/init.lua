@@ -12,6 +12,7 @@ local screen = nil
 local ctrl = nil
 local sprt = nil
 local state = nil
+local bot = nil
 
 local mode = '{{mode}}'
 local renderState = {{render_state}}
@@ -36,8 +37,19 @@ function startBotchi()
 end
 
 function startBot()
-    local bot = require('{{plugin_name}}/bot')
-    bot.init(ctrl, state)
+    local ipc = require('{{plugin_name}}/ipc')
+    ipc.init()
+
+    bot = require('{{plugin_name}}/bot')
+    bot.init(ctrl, state, ipc)
+end
+
+function startRC()
+    local ipc = require('{{plugin_name}}/ipc')
+    ipc.init()
+
+    local rc = require('{{plugin_name}}/remoteController')
+    rc.init(ctrl, state, ipc)
 end
 
 function displayBotchi()
@@ -53,6 +65,10 @@ function displayBotchi()
 
     if showInput then
         ctrl.render(screen)
+    end
+
+    if bot then
+        bot.render()
     end
 end
 

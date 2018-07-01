@@ -53,14 +53,18 @@ local screenMaxY = 240
 
 local sprt = nil
 
-local function readObjects(ret, addr, addr_end, step)
+local function readObjects(ret, addr, addr_end, step, null)
     if step == nil  then
         step = 0x20
     end
 
+    if null == nil then
+        null = false
+    end
+
     for i = addr, addr_end, step do
         local id = mem:read_u16(i + 0)
-        if id ~= 0 then
+        if null or id ~= 0 then
             local sid = mem:read_u32(i + 2)
             local pos_x = mem:read_u16(i + 6)
             local pos_y = mem:read_u16(i + 8)
@@ -171,11 +175,11 @@ local function readGameState()
     local powerup = {}
 
     readObjects(enemies, ENEMIES_BEG, ENEMIES_END)
-    readObjects(bullets, BULLETS_BEG, BULLETS_END, 0x40)
+    readObjects(bullets, BULLETS_BEG, BULLETS_END, 0x40, true)
     readObjects(bonuses, BONUSES_BEG, BONUSES_END)
     readObjects(powerup, POWERUP_BEG, POWERUP_END)
 
-    readObjects(ownshot, OWNSHOT_BEG, OWNSHOT_END, 0x28)
+    readObjects(ownshot, OWNSHOT_BEG, OWNSHOT_END, 0x28, true)
 
     enemies = filterInvisible(enemies, visible)
 

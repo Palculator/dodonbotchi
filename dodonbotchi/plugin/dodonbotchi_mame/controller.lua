@@ -96,6 +96,36 @@ function singlePress(button)
     inputStates[button] = tickRate + 1
 end
 
+function performDirection(state, posKey, negKey)
+    if state == '1' then
+        stopHold(posKey)
+        singlePress(negKey)
+    end
+
+    if state == '2' then
+        stopHold(negKey)
+        singlePress(posKey)
+    end
+end
+
+function performButton(state, key)
+    if state == '1' then
+        singlePress(key)
+    end
+end
+
+function performAction(action)
+    local vertical = action:sub(1, 1)
+    performDirection(vertical, 'U', 'D')
+    local horizontal = action:sub(2, 2)
+    performDirection(horizontal, 'R', 'L')
+
+    local button1 = action:sub(3, 3)
+    performButton(button1, '1')
+    local button2 = action:sub(4, 4)
+    performButton(button2, '2')
+end
+
 function render(screen)
     local btnColour
 
@@ -156,5 +186,6 @@ exports.startHold = startHold
 exports.stopHold = stopHold
 exports.singlePress = singlePress
 exports.render = render
+exports.performAction = performAction
 
 return exports

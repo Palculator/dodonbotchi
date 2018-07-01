@@ -17,15 +17,14 @@ from datetime import datetime
 import click
 
 from dodonbotchi import mame
+from dodonbotchi import ddon
 from dodonbotchi.config import ensure_config
 from dodonbotchi.exy import EXY
 from dodonbotchi.mame import RECORDING_FILE
-from dodonbotchi.util import ensure_directories
+from dodonbotchi.util import ensure_directories, generate_now_serial_number
 
-TIMESTAMP = datetime.now().isoformat().replace(':', '_')
-DEF_LOG = 'log'
+DEF_LOG = 'dodonbotchi.log'
 DEF_CFG = 'dodonbotchi.cfg'
-LOG_FIL = 'dodonbotchi_{}.log'.format(TIMESTAMP)
 
 
 def log_exception(extype, value, trace):
@@ -36,20 +35,21 @@ def log_exception(extype, value, trace):
     log.exception('Uncaught exception: ', exc_info=(extype, value, trace))
 
 
-def setup_logging(log_dir):
+def setup_logging(log_file, no_file=False):
     """
     Sets up the logging framework to log to the given log_file and to STDOUT.
     If the path to the log_file does not exist, directories for it will be
     created.
     """
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    if os.path.exists(log_file):
+        backup = f'{log_file}.1'
+        shutil.move(log_file, backup)
 
-    log_file = os.path.join(log_dir, LOG_FIL)
-
-    file_handler = log.FileHandler(log_file, 'w', 'utf-8')
     term_handler = log.StreamHandler()
-    handlers = [term_handler, file_handler]
+    handlers = [term_handler]
+    if not no_file:
+        file_handler = log.FileHandler(log_file, 'w', 'utf-8')
+        handlers.append(file_handler)
 
     fmt = '%(asctime)s %(levelname)-8s %(message)s'
 
@@ -61,30 +61,49 @@ def setup_logging(log_dir):
 
 
 @click.group()
-@click.option('--log-dir', type=click.Path(file_okay=False), default=DEF_LOG)
+@click.option('--log-file', type=click.Path(dir_okay=False), default=DEF_LOG)
 @click.option('--cfg-file', type=click.Path(dir_okay=False), default=DEF_CFG)
-def cli(log_dir=None, cfg_file=None):
+@click.option('--no-file', is_flag=True)
+def cli(log_file=None, cfg_file=None, no_file=False):
     """
     Click group that ensures at least log and configuration files are present,
     since the rest of the application uses those.
     """
-    setup_logging(log_dir)
+    setup_logging(log_file, no_file)
     ensure_config(cfg_file)
 
 
-@cli.command()
+@cli.group()
+def rl():
+    pass
+
+
+@rl.command()
+@click.option('--agent')
 @click.argument('exy-dir', type=click.Path(file_okay=False))
-def train(exy_dir):
+def train(agent, exy_dir):
     """
     Trains a neural net writing trial runs, captures, progress information, and
     brain states to the specified output folder until the user interrupts
     training.
     """
-    exy = EXY(exy_dir)
+    exy = EXY(exy_dir, agent)
     exy.train()
 
 
-@cli.command()
+@rl.command()
+@click.option('--amount', default=10)
+@click.option('--agent')
+@click.argument('exy-dir', type=click.Path(file_okay=False))
+def test(amount, agent, exy_dir):
+    """
+    Tests the neural network for the given amount of episodes.
+    """
+    exy = EXY(exy_dir, agent)
+    exy.test(amount)
+
+
+@rl.command()
 @click.argument('exy-dir', type=click.Path(file_okay=False))
 def plot(exy_dir):
     """
@@ -92,11 +111,11 @@ def plot(exy_dir):
     analysis. Plots are saved to disk in each episode folder and the EXY dir
     itself.
     """
-    exy = EXY(exy_dir)
+    exy = EXY(exy_dir, None)
     exy.plot_overall()
 
 
-@cli.command()
+@rl.command()
 @click.argument('exy-dir', type=click.Path(file_okay=False))
 @click.argument('video-file', type=click.Path(dir_okay=False))
 def render_all(exy_dir, video_file):
@@ -140,7 +159,7 @@ def render_all(exy_dir, video_file):
     shutil.rmtree(snp_dir)
 
 
-@cli.command()
+@rl.command()
 @click.option('--amount', default=10)
 @click.argument('exy-dir', type=click.Path(file_okay=False))
 @click.argument('video-dir', type=click.Path(file_okay=False))
@@ -185,6 +204,18 @@ def render_leaderboard(amount, exy_dir, video_dir):
         subprocess.call(call, shell=True)
 
     shutil.rmtree(snp_dir)
+
+
+@cli.group()
+def ddonpai():
+    log.info('Serial: %s', generate_now_serial_number())
+
+
+@ddonpai.command()
+@click.argument('ddonpai-dir')
+@click.option('--show', is_flag=True)
+def play(ddonpai_dir, show):
+    ddon.play(ddonpai_dir, show=show)
 
 
 if __name__ == '__main__':

@@ -24,10 +24,12 @@ from rl.policy import LinearAnnealedPolicy, EpsGreedyQPolicy, GreedyQPolicy
 from rl.policy import BoltzmannQPolicy, MaxBoltzmannQPolicy
 from rl.policy import BoltzmannGumbelQPolicy
 
-from dodonbotchi.config import CFG as cfg
-from dodonbotchi.mame import DoDonPachiEnv
-from dodonbotchi.util import get_now_string, generate_now_serial_number
-from dodonbotchi.util import ensure_directories
+from . import agents
+
+from .config import CFG as cfg
+from .mame import Ddonpach, DoDonPachiEnv
+from .util import generate_now_serial_number
+from .util import ensure_directories
 
 
 EPS_DIR = 'episodes'
@@ -39,9 +41,8 @@ STOP_FILE = 'stop.pls'
 
 SNAP_DIR = 'snap'
 
-MEMORY_WINDOW = 4
-WARMUP_INIT = 100000
-STEPS = 100000000000
+WARMUP_INIT = 50000
+STEPS = 1000000
 
 COLS = [
     'Episode',
@@ -50,7 +51,6 @@ COLS = [
     'Bombs',
     'Score',
     'Combo',
-    'Grade',
     'Reward',
     'Hit',
     'RewardSum',
@@ -76,87 +76,6 @@ def generate_episode_serial(ep_num):
     return serial
 
 
-def create_model(actions, input_shape):
-    """
-    Creates the neural network model outputting any of the given amount of
-    actions and observing inputs of the given shape.
-
-    This function returns the neural net as an uncompiled keras model.
-    """
-
-    model = Sequential()
-    print(input_shape)
-    model.add(TimeDistributed(Convolution2D(64, (8, 8), strides=(4, 4), activation='relu'), input_shape=input_shape))
-    model.add(TimeDistributed(Convolution2D(128, (4, 4), strides=(2, 2), activation='relu')))
-    model.add(TimeDistributed(Convolution2D(128, (3, 3), activation='relu')))
-    model.add(TimeDistributed(Flatten()))
-
-    # Use all traces for training
-    #model.add(LSTM(512, return_sequences=True,  activation='tanh'))
-    #model.add(TimeDistributed(Dense(output_dim=action_size, activation='linear')))
-
-    model.add(LSTM(512,  activation='tanh'))
-    model.add(Dense(output_dim=actions, activation='linear'))
-
-    # model = Sequential()
-    # model.add(Permute((2, 3, 1), input_shape=input_shape))
-    # model.add(Convolution2D(32, (8, 8), subsample=(4, 4)))
-    # model.add(Activation('relu'))
-    # model.add(Convolution2D(64, (4, 4), subsample=(2, 2)))
-    # model.add(Activation('relu'))
-    # model.add(Convolution2D(64, (3, 3), subsample=(1, 1)))
-    # model.add(Activation('relu'))
-    # model.add(Flatten())
-    # model.add(Dense(512))
-    # model.add(Activation('relu'))
-    # model.add(Dense(actions))
-    # model.add(Activation('linear'))
-
-    log.info('Created neural network model: ')
-    log.info(model.summary())
-
-    return model
-
-
-def create_memory():
-    """
-    Creates a memory instance to be used by a learning agent and returns it.
-    """
-    memory = SequentialMemory(limit=100000, window_length=MEMORY_WINDOW)
-    log.debug('Created reinforcement learning memory.')
-    return memory
-
-
-def create_policy():
-    """
-    Creates a policy instance to be used by a learning agent and returns it.
-    """
-    policy = EpsGreedyQPolicy()
-    policy = LinearAnnealedPolicy(policy, attr='eps', value_max=0.95,
-                                  value_min=0.1, value_test=0.05,
-                                  nb_steps=STEPS // 100)
-    policy = BoltzmannQPolicy()
-    log.debug('Created reinforcement learning policy.')
-    return policy
-
-
-def create_agent(warmup, actions, input_shape):
-    """
-    Creates the reinforcement learning agent used by EXY, with an underlying
-    neural network using the given observation and action dimensions.
-    """
-    input_shape = (MEMORY_WINDOW,) + input_shape
-    model = create_model(actions, input_shape)
-    memory = create_memory()
-    policy = create_policy()
-
-    agent = DQNAgent(model=model, memory=memory, policy=policy,
-                     nb_actions=actions, nb_steps_warmup=warmup)
-    agent.compile(Adam(), metrics=['mae'])
-    log.debug('Created reinforcement learning agent.')
-    return agent
-
-
 class EXY(Callback):
     """
     The EXY class is used to gradually train a neural net to perform well in
@@ -171,15 +90,18 @@ class EXY(Callback):
     EXY's state from where it was left off.
     """
 
-    def __init__(self, exy_dir):
+    def __init__(self, exy_dir, agent_name):
         self.exy_dir = exy_dir
+        self.agent_name = agent_name
 
+        self.ddonpach = None
         self.env = None
 
         self.warmup = WARMUP_INIT
 
         self.episode_num = 0
         self.episode_ser = None
+        self.episode_dir = None
         self.leaderboard = []
 
         self.current_stats = None
@@ -279,14 +201,14 @@ class EXY(Callback):
         self.episode_ser = generate_episode_serial(self.episode_num)
         log.debug('Starting new episode: %s', self.episode_ser)
 
-        ep_dir = self.get_episode_dir(self.episode_ser)
-        snap_dir = get_snap_dir(ep_dir)
-        ensure_directories(ep_dir, snap_dir)
+        self.episode_dir = self.get_episode_dir(self.episode_ser)
+        snap_dir = get_snap_dir(self.episode_dir)
+        ensure_directories(self.episode_dir, snap_dir)
 
-        self.env.inp_dir = ep_dir
-        self.env.snp_dir = snap_dir
+        self.ddonpach.inp_dir = self.episode_dir
+        self.ddonpach.snp_dir = snap_dir
 
-        self.current_stats = get_stats_file(ep_dir)
+        self.current_stats = get_stats_file(self.episode_dir)
 
     def setup(self):
         """
@@ -294,8 +216,11 @@ class EXY(Callback):
         environment.
         """
         actions = self.env.action_space.shape[0]
-        input_shape = self.env.observation_space.shape
-        agent = create_agent(self.warmup, actions, input_shape)
+
+        agent = agents.create_agent(self.agent_name,
+                                    self,
+                                    self.env,
+                                    actions)
 
         ensure_directories(self.exy_dir)
 
@@ -319,7 +244,6 @@ class EXY(Callback):
             self.env.current_bombs,
             self.env.current_score,
             self.env.current_combo,
-            self.env.current_grade,
             self.env.current_reward,
             self.env.current_hit,
             self.env.reward_sum,
@@ -343,7 +267,7 @@ class EXY(Callback):
         stop_file = self.get_stop_file()
         if os.path.exists(stop_file):
             os.remove(stop_file)
-            raise KeyboardInterrupt() # lol
+            raise KeyboardInterrupt()  # lol
 
     def on_episode_end(self, episode, logs=None):
         """
@@ -370,7 +294,8 @@ class EXY(Callback):
         and after training, either manually stopped or regularly terminated,
         current weights will be saved to EXY's brain file.
         """
-        self.env = DoDonPachiEnv()
+        self.ddonpach = Ddonpach()
+        self.env = DoDonPachiEnv(self.ddonpach)
         agent = self.setup()
         log.info('Starting main training loop.')
         try:
@@ -380,14 +305,31 @@ class EXY(Callback):
             self.env.close()
             self.save_brain(agent)
 
+    def test(self, episodes):
+        """
+        Creates a DoDonPachi environment and a reinforcement learning agent for
+        it and then trains it on that environment. Training can be interrupted
+        and after training, either manually stopped or regularly terminated,
+        current weights will be saved to EXY's brain file.
+        """
+        self.env = DoDonPachiEnv()
+        agent = self.setup()
+        log.info('Starting main training loop.')
+        try:
+            agent.test(self.env, nb_episodes=episodes)
+        finally:
+            self.env.close()
+
     def plot_lm(self, plot_file, stats, x, y):
-        plot = sns.lmplot(x=x, y=y, data=stats, palette='muted', scatter_kws={'s': 0.1})
+        plot = sns.lmplot(x=x, y=y, data=stats,
+                          palette='muted', scatter_kws={'s': 0.1})
         plot.savefig(plot_file, dpi=300)
         log.info('Plotted: %s', plot_file)
         plt.close('all')
 
     def plot_overall(self):
         overall = []
+        total_steps = 0
 
         episodes_dir = self.get_episodes_dir()
         episodes = sorted(os.listdir(episodes_dir))
@@ -396,12 +338,23 @@ class EXY(Callback):
             stats_file = get_stats_file(episode_dir)
             with open(stats_file, 'r') as in_file:
                 stats = in_file.readlines()
+            steps = len(stats)
+            total_steps += steps
             stats = stats[-1]
             stats = stats.split(';')
+            stats = stats + [steps, total_steps]
             overall.append(stats)
 
-        stats = pd.DataFrame(data=overall, columns=COLS)
-        stats[COLS] = stats[COLS].apply(pd.to_numeric, axis=1)
+        columns = COLS + ['Steps', 'TotalSteps']
+        stats = pd.DataFrame(data=overall, columns=columns)
+        stats[columns] = stats[columns].apply(pd.to_numeric, axis=1)
 
         score_episode = os.path.join(self.exy_dir, 'score_episode.png')
         self.plot_lm(score_episode, stats, 'Episode', 'Score')
+
+        steps_episode = os.path.join(self.exy_dir, 'steps_episode.png')
+        self.plot_lm(steps_episode, stats, 'Episode', 'Steps')
+
+        total_steps_episode = os.path.join(self.exy_dir,
+                                           'total_steps_episode.png')
+        self.plot_lm(total_steps_episode, stats, 'Episode', 'TotalSteps')
