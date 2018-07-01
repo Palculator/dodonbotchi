@@ -445,6 +445,5 @@ def play(ddonpai_dir, draw=False, show=False):
     ddonpach.inp_dir = ddonpai_dir
     ddonpach.snp_dir = ddonpai_dir
 
-    ddonpach.start_mame()
-
-    ddonpai_loop(ddonpach, draw=draw, show=show)
+    with ddonpach as mame:
+        ddonpai_loop(mame, draw=draw, show=show)

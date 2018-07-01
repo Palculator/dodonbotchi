@@ -361,18 +361,18 @@ class Ddonpach:
 
         write_plugin(mode='bot', **cfg)
 
-    def send_message(self, message):
+    def send_message(self, message, force=False):
         """
         Sends a message to the client, terminated by a newline.
         """
-        if not self.waiting:
+        if not force and not self.waiting:
             raise ValueError('Client is not waiting for new messages.')
 
         self.sfile.write('{}\n'.format(message))
         self.sfile.flush()
         self.waiting = False
 
-    def send_command(self, command, **options):
+    def send_command(self, command, force=False, **options):
         """
         Sends a command to the client in the form of a json object containing
         at least a `command` field and additional fields given in the
@@ -382,7 +382,7 @@ class Ddonpach:
         for key, val in options.items():
             message[key] = val
         message = json.dumps(message)
-        self.send_message(message)
+        self.send_message(message, force=force)
 
     def send_action(self, action):
         """
@@ -452,7 +452,7 @@ class Ddonpach:
         terminate on its own.
         """
         if self.client and self.sfile:
-            self.send_command('kill')
+            self.send_command('kill', force=True)
 
         sleep(1)
 
@@ -475,6 +475,13 @@ class Ddonpach:
 
         self.client = None
         self.sfile = None
+
+    def __enter__(self):
+        self.start_mame()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_mame()
 
     def reward_step(self, action, observation):
         lives = observation['lives']
