@@ -1,5 +1,7 @@
 local exports = {}
 
+local X_OFFSET = 0x10006A
+
 local COLOUR_SHIP_FILL = 0xAAFF00FF
 local COLOUR_SHIP_LINE = 0xAAFF0000
 
@@ -51,9 +53,11 @@ local lastState = nil
 local screenMaxX = 320
 local screenMaxY = 240
 
+local xOffSet = 0
+
 local sprt = nil
 
-local function readObjects(ret, addr, addr_end, step, null)
+local function readObjects(ret, xDelta, addr, addr_end, step, null)
     if step == nil  then
         step = 0x20
     end
@@ -70,6 +74,7 @@ local function readObjects(ret, addr, addr_end, step, null)
             local pos_y = mem:read_u16(i + 8)
             pos_x = math.floor(pos_x / 64)
             pos_y = math.floor(pos_y / 64)
+            pos_y = pos_y - xDelta
             if pos_x < screenMaxX and pos_y < screenMaxY then
                 local mode = mem:read_u16(i + 10)
                 local siz_x = 16 * math.floor(mode / 256)
@@ -106,7 +111,12 @@ local function readShip()
     x = math.floor(x / 64)
     y = math.floor(y / 64)
 
-    return {x = x, y = y}
+    return {
+        pos_x = x,
+        pos_y = y,
+        siz_x = 32,
+        siz_y = 32
+    }
 end
 
 local function weirdToInt(weird, digits)
@@ -152,6 +162,9 @@ local function readHit()
 end
 
 local function readGameState()
+    local currentXOffset = math.floor(mem:read_i16(X_OFFSET) / 64)
+    local xDelta = xOffSet - currentXOffset
+
     local layer1 = sprt.readSprites(mem, 0)
     local layer2 = sprt.readSprites(mem, 1)
     local visible = {}
@@ -166,7 +179,7 @@ local function readGameState()
 
     local frame = screen:frame_number()
 
-    local ship = readShip()
+    local ship = {readShip()}
 
     local enemies = {}
     local bullets = {}
@@ -174,12 +187,12 @@ local function readGameState()
     local bonuses = {}
     local powerup = {}
 
-    readObjects(enemies, ENEMIES_BEG, ENEMIES_END)
-    readObjects(bullets, BULLETS_BEG, BULLETS_END, 0x40, true)
-    readObjects(bonuses, BONUSES_BEG, BONUSES_END)
-    readObjects(powerup, POWERUP_BEG, POWERUP_END)
+    readObjects(enemies, xDelta, ENEMIES_BEG, ENEMIES_END)
+    readObjects(bullets, xDelta, BULLETS_BEG, BULLETS_END, 0x40, true)
+    readObjects(bonuses, xDelta, BONUSES_BEG, BONUSES_END)
+    readObjects(powerup, xDelta, POWERUP_BEG, POWERUP_END)
 
-    readObjects(ownshot, OWNSHOT_BEG, OWNSHOT_END, 0x28, true)
+    readObjects(ownshot, xDelta, OWNSHOT_BEG, OWNSHOT_END, 0x28, true)
 
     enemies = filterInvisible(enemies, visible)
 
@@ -190,6 +203,7 @@ local function readGameState()
     local hit = readHit()
 
     local state = {
+        x_off = currentXOffset,
         frame = frame,
         ship = ship,
 
@@ -207,6 +221,7 @@ local function readGameState()
     }
 
     lastState = state
+    xOffSet = currentXOffset
 
     return state
 end

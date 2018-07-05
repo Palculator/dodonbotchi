@@ -213,9 +213,9 @@ def ddonpai():
 
 @ddonpai.command()
 @click.argument('ddonpai-dir')
-@click.option('--show', is_flag=True)
-def play(ddonpai_dir, show):
-    ddon.play(ddonpai_dir, show=show)
+@click.option('--snapshots', is_flag=True)
+def play(ddonpai_dir, snapshots):
+    ddon.play(ddonpai_dir, snapshots=snapshots)
 
 
 if __name__ == '__main__':

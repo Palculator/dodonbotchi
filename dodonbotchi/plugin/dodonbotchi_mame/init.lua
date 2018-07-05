@@ -34,6 +34,10 @@ function startBotchi()
     if mode == 'bot' then
         startBot()
     end
+
+    if mode == 'rc' then
+        startRC()
+    end
 end
 
 function startBot()
@@ -48,7 +52,7 @@ function startRC()
     local ipc = require('{{plugin_name}}/ipc')
     ipc.init()
 
-    local rc = require('{{plugin_name}}/remoteController')
+    rc = require('{{plugin_name}}/remoteController')
     rc.init(ctrl, state, ipc)
 end
 

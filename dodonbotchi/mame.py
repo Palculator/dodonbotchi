@@ -16,6 +16,7 @@ import numpy as np
 
 from jinja2 import Environment, FileSystemLoader
 from rl.core import Env, Space
+from PIL import Image
 
 from dodonbotchi.config import CFG as cfg
 from dodonbotchi.util import ensure_directories
@@ -344,7 +345,7 @@ class Ddonpach:
     scores in those observations are tracked to compute action rewards.
     """
 
-    def __init__(self, seed=None):
+    def __init__(self, mode, seed=None):
         self.inp_dir = None
         self.snp_dir = None
 
@@ -359,7 +360,7 @@ class Ddonpach:
         self.server.listen()
         log.info('Started socket server on %s:%s', cfg.host, cfg.port)
 
-        write_plugin(mode='bot', **cfg)
+        write_plugin(mode=mode, **cfg)
 
     def send_message(self, message, force=False):
         """
@@ -414,6 +415,19 @@ class Ddonpach:
         observation_dic = message['observation']
 
         return observation_dic
+
+    def get_snap(self):
+        self.send_command('snap')
+        ack = self.read_message()
+        assert ack['message'] == 'ACK'
+
+        snap_dir = os.path.join(self.snp_dir, 'ddonpach')
+        snaps = list(sorted(os.listdir(snap_dir)))
+        snap = snaps[-1]
+        snap = os.path.join(snap_dir, snap)
+        ret = Image.open(snap)
+        os.remove(snap)
+        return ret
 
     def start_mame(self):
         """

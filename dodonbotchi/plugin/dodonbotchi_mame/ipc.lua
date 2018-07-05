@@ -9,7 +9,6 @@ end
 function sendACK()
     local message = { message = 'ACK' }
     message = json.stringify(message)
-
     sendMessage(message)
 end
 

@@ -38,5 +38,6 @@ setup(
         'iterfzf==0.4.0.17.3',
         'seaborn==0.8.1',
         'shapely==1.6.4',
+        'scipy==1.1.0',
     ]
 )

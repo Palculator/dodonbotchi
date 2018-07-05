@@ -121,9 +121,10 @@ function init(controller, gameState, comm)
     ipc = comm
 
     mem = manager:machine().devices[':maincpu'].spaces['program']
-    screen = manager:machine().screens[':screen']
 
     emu.register_frame(update)
+
+    screen = manager:machine().screens[':screen']
 end
 
 exports.init = init

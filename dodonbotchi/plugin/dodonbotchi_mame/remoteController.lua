@@ -1,6 +1,10 @@
+local json = require('json')
+
 local ctrl = nil
 local state = nil
 local ipc = nil
+
+local screen = nil
 
 local tickRate = {{tick_rate}}
 local sleepFrames = 15
@@ -15,7 +19,6 @@ end
 
 function handleSocketInput()
     local message = ipc.readMessage()
-
     if message ~= nil then
         if message['command'] == 'kill' then
             manager:machine():exit()
@@ -26,6 +29,11 @@ function handleSocketInput()
             emu.unpause()
             sleepFrames = tickRate
         end
+
+        if message['command'] == 'snap' then
+            screen:snapshot()
+            ipc.sendACK()
+        end
     end
 end
 
@@ -35,13 +43,18 @@ function update()
     end
 
     if not manager:machine().paused then
+        sleepFrames = sleepFrames - 1
         ctrl.updateInputStates()
+        if sleepFrames == 0 then
+            -- produceSocketOutput()
+            produceSocketOutput()
+            emu.pause()
+        else
+        end
     end
 end
 
 function update_post()
-    produceSocketOutput()
-    emu.pause()
 end
 
 function init(controller, gameState, comm)
@@ -51,6 +64,8 @@ function init(controller, gameState, comm)
 
     emu.register_frame(update)
     emu.register_frame_done(update_post)
+
+    screen = manager:machine().screens[':screen']
 end
 
 local exports = {}
