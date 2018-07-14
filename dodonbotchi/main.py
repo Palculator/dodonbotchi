@@ -18,6 +18,7 @@ import click
 
 from dodonbotchi import mame
 from dodonbotchi import ddon
+from dodonbotchi import brute
 from dodonbotchi.config import ensure_config
 from dodonbotchi.exy import EXY
 from dodonbotchi.mame import RECORDING_FILE
@@ -217,6 +218,20 @@ def ddonpai():
 def play(ddonpai_dir, snapshots):
     ddon.play(ddonpai_dir, snapshots=snapshots)
 
+
+@cli.group()
+def bruteforce():
+    pass
+
+@bruteforce.command()
+@click.argument('cwd')
+def force(cwd):
+    brute.force(cwd)
+
+@bruteforce.command()
+@click.argument('cwd')
+def replay(cwd):
+    brute.replay(cwd)
 
 if __name__ == '__main__':
     cli()

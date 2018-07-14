@@ -38,6 +38,7 @@ local OWNSHOT_END = 0x1038F6
 
 local SHIP_X = 0x102C92
 local SHIP_Y = 0x102C94
+local SHIP_ID = 0x102C8C
 
 local LIVES = 0x101965
 local BOMBS = 0x102CB0
@@ -161,6 +162,11 @@ local function readHit()
     return hit
 end
 
+local function readDeath()
+    local shipId = mem:read_u16(SHIP_ID)
+    return shipId == 0x100
+end
+
 local function readGameState()
     local currentXOffset = math.floor(mem:read_i16(X_OFFSET) / 64)
     local xDelta = xOffSet - currentXOffset
@@ -200,12 +206,14 @@ local function readGameState()
     local bombs = readBombs()
     local score = readScore()
     local combo = readCombo()
+    local death = readDeath()
     local hit = readHit()
 
     local state = {
         x_off = currentXOffset,
         frame = frame,
         ship = ship,
+        death = death,
 
         enemies = enemies,
         bullets = bullets,

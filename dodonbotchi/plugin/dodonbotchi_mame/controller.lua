@@ -106,11 +106,20 @@ function performDirection(state, posKey, negKey)
         stopHold(negKey)
         singlePress(posKey)
     end
+
+    if state == '0' then
+        stopHold(posKey)
+        stopHold(negKey)
+    end
 end
 
 function performButton(state, key)
     if state == '1' then
         singlePress(key)
+    end
+
+    if state == '0' then
+        stopHold(key)
     end
 end
 

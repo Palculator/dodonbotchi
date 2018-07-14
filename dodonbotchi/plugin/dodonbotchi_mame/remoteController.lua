@@ -9,6 +9,8 @@ local screen = nil
 local tickRate = {{tick_rate}}
 local sleepFrames = 15
 
+local cooldown = 0
+
 function produceSocketOutput()
     local currentState = state.readGameState()
     local message = { message = 'observation', observation = currentState }
@@ -34,10 +36,32 @@ function handleSocketInput()
             screen:snapshot()
             ipc.sendACK()
         end
+
+        if message['command'] == 'save' then
+            local name = message['name']
+            manager:machine():save(name)
+            emu.pause()
+            ipc.sendACK()
+            cooldown = 2
+        end
+
+        if message['command'] == 'load' then
+            local name = message['name']
+            manager:machine():load(name)
+            emu.pause()
+            ctrl.performAction('0000')
+            ipc.sendACK()
+            cooldown = 2
+        end
     end
 end
 
 function update()
+    if cooldown > 0 then
+        cooldown = cooldown - 1
+        return
+    end
+
     if manager:machine().paused then
         handleSocketInput()
     end

@@ -328,8 +328,8 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
         call.append('-snapshot_directory')
         call.append(snp_dir)
 
-    call.append('-aviwrite')
-    call.append(avi_file)
+    #call.append('-aviwrite')
+    #call.append(avi_file)
 
     return subprocess.call(call, shell=True)
 
@@ -348,6 +348,7 @@ class Ddonpach:
     def __init__(self, mode, seed=None):
         self.inp_dir = None
         self.snp_dir = None
+        self.sav_dir = None
 
         self.process = None
         self.server = None
@@ -391,6 +392,16 @@ class Ddonpach:
         member of the DoDonPachiActions space.
         """
         self.send_command('action', inputs=action)
+
+    def send_save_state(self, name):
+        self.send_command('save', name=name)
+        ack = self.read_message()
+        assert ack['message'] == 'ACK'
+
+    def send_load_state(self, name):
+        self.send_command('load', name=name)
+        ack = self.read_message()
+        assert ack['message'] == 'ACK'
 
     def read_message(self):
         """
@@ -450,6 +461,14 @@ class Ddonpach:
         abs_snp_dir = os.path.abspath(self.snp_dir)
         call.append('-snapshot_directory')
         call.append(abs_snp_dir)
+
+        if self.sav_dir:
+            abs_sav_dir = os.path.abspath(self.sav_dir)
+            call.append('-state_directory')
+            call.append(abs_sav_dir)
+
+        call.append('-aviwrite')
+        call.append('brute.avi')
 
         self.process = subprocess.Popen(call, shell=SHELL)
         log.info('Started MAME with dodonbotchi ipc & dodonpachi.')
