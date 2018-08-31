@@ -22,6 +22,7 @@ end
 function handleSocketInput()
     local message = ipc.readMessage()
     if message ~= nil then
+        print(message['command'])
         if message['command'] == 'kill' then
             manager:machine():exit()
         end
@@ -70,7 +71,6 @@ function update()
         sleepFrames = sleepFrames - 1
         ctrl.updateInputStates()
         if sleepFrames == 0 then
-            -- produceSocketOutput()
             produceSocketOutput()
             emu.pause()
         else
@@ -90,6 +90,8 @@ function init(controller, gameState, comm)
     emu.register_frame_done(update_post)
 
     screen = manager:machine().screens[':screen']
+
+    emu.pause()
 end
 
 local exports = {}

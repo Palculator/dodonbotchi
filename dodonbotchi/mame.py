@@ -15,7 +15,7 @@ from time import sleep
 import numpy as np
 
 from jinja2 import Environment, FileSystemLoader
-from rl.core import Env, Space
+#from rl.core import Env, Space
 from PIL import Image
 
 from dodonbotchi.config import CFG as cfg
@@ -35,7 +35,7 @@ def get_action_str(vert=0, hori=0, shot=0, bomb=0):
     return f'{vert}{hori}{shot}{bomb}'
 
 
-class DoDonPachiActions(Space):
+class DoDonPachiActions():
     """
     This class defines the valid action space for DoDonBotchi. Actions are
     encoded as strings representing button and direction states. The format of
@@ -328,8 +328,8 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
         call.append('-snapshot_directory')
         call.append(snp_dir)
 
-    #call.append('-aviwrite')
-    #call.append(avi_file)
+    # call.append('-aviwrite')
+    # call.append(avi_file)
 
     return subprocess.call(call, shell=True)
 
@@ -354,7 +354,7 @@ class Ddonpach:
         self.server = None
         self.client = None
         self.sfile = None
-        self.waiting = False
+        self.waiting = True
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((cfg.host, cfg.port))
@@ -401,6 +401,7 @@ class Ddonpach:
     def send_load_state(self, name):
         self.send_command('load', name=name)
         ack = self.read_message()
+        print(ack)
         assert ack['message'] == 'ACK'
 
     def read_message(self):
@@ -467,8 +468,8 @@ class Ddonpach:
             call.append('-state_directory')
             call.append(abs_sav_dir)
 
-        call.append('-aviwrite')
-        call.append('brute.avi')
+        # call.append('-aviwrite')
+        # call.append('brute.avi')
 
         self.process = subprocess.Popen(call, shell=SHELL)
         log.info('Started MAME with dodonbotchi ipc & dodonpachi.')
@@ -553,7 +554,7 @@ class Ddonpach:
         self.sfile = None
 
 
-class DoDonPachiEnv(Env):
+class DoDonPachiEnv():
     def __init__(self, ddonpach):
         self.ddonpach = ddonpach
         self.reward_range = (-1, 1)

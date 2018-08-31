@@ -116,6 +116,8 @@ function render()
 end
 
 function init(controller, gameState, comm)
+    emu.pause()
+
     ctrl = controller
     state = gameState
     ipc = comm

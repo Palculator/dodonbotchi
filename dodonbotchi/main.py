@@ -19,8 +19,9 @@ import click
 from dodonbotchi import mame
 from dodonbotchi import ddon
 from dodonbotchi import brute
+from dodonbotchi import evo
 from dodonbotchi.config import ensure_config
-from dodonbotchi.exy import EXY
+# from dodonbotchi.exy import EXY
 from dodonbotchi.mame import RECORDING_FILE
 from dodonbotchi.util import ensure_directories, generate_now_serial_number
 
@@ -220,18 +221,38 @@ def play(ddonpai_dir, snapshots):
 
 
 @cli.group()
+def evopachi():
+    pass
+
+
+@evopachi.command()
+@click.argument('cwd', click.Path(file_okay=False))
+def progression(cwd):
+    evo.evolve(cwd)
+
+
+@evopachi.command()
+@click.argument('cwd', click.Path(file_okay=False))
+def replay(cwd):
+    evo.replay(cwd)
+
+
+@cli.group()
 def bruteforce():
     pass
+
 
 @bruteforce.command()
 @click.argument('cwd')
 def force(cwd):
     brute.force(cwd)
 
+
 @bruteforce.command()
 @click.argument('cwd')
 def replay(cwd):
     brute.replay(cwd)
+
 
 if __name__ == '__main__':
     cli()
