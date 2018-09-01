@@ -36,7 +36,6 @@ setup(
         'keras-rl',
         'iterfzf',
         'seaborn',
-        'shapely',
         'scipy',
     ]
 )

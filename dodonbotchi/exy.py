@@ -1,360 +1,440 @@
-"""
-This module contains DoDonBotchi's brain and neuroevolutional code. It handles
-learning, evolution, and controlling DoDonPachi in realtime.
-"""
+import copy
 import json
-import logging as log
+import math
 import os
-import os.path
+import random
 
-import matplotlib.pyplot as plt
-import pandas as pd
+from pathlib import Path
+from time import sleep
+
+import numpy as np
 import seaborn as sns
 
-from keras.models import Sequential
-from keras.layers import Dense, Activation, Flatten, Permute, Convolution2D, TimeDistributed, LSTM
-from keras.optimizers import Adam
+from matplotlib import pyplot as plt
+from matplotlib.pyplot import imshow
+from PIL import Image, ImageDraw, ImageFilter
 
-from rl.agents.cem import CEMAgent
-from rl.agents.dqn import DQNAgent
-from rl.agents.sarsa import SARSAAgent
-from rl.callbacks import Callback
-from rl.memory import EpisodeParameterMemory, SequentialMemory
-from rl.policy import LinearAnnealedPolicy, EpsGreedyQPolicy, GreedyQPolicy
-from rl.policy import BoltzmannQPolicy, MaxBoltzmannQPolicy
-from rl.policy import BoltzmannGumbelQPolicy
-
-from . import agents
+from deap import base
+from deap import creator
+from deap import tools
 
 from .config import CFG as cfg
-from .mame import Ddonpach, DoDonPachiEnv
-from .util import generate_now_serial_number
-from .util import ensure_directories
+from .mame import Ddonpach, get_action_str
+from .util import ensure_directories, get_now_string
+
+sns.set()
+
+DIRECTIONS = []
+
+for vert in range(3):
+    for hori in range(3):
+        if not vert and not hori:
+            continue
+        DIRECTIONS.append((vert, hori))
+
+assert len(DIRECTIONS) == 8
+
+WINDOW_SIZE = 64
+CXPB, MUTPB = 0.5, 0.2
+POP = 16
+GENS = 10
+
+FONT_SIZE = 10
+WATERMARK = '@Signaltonsalat'
+WATERMARK_SIZE = 8
 
 
-EPS_DIR = 'episodes'
+def clear_labels_ticks(*plots):
+    for plot in plots:
+        plot.clear()
+        plot.cla()
 
-BRAIN_FILE = 'brain.h5f'
-PROPS_FILE = 'exy.json'
-STATS_FILE = 'stats.csv'
-STOP_FILE = 'stop.pls'
-
-SNAP_DIR = 'snap'
-
-WARMUP_INIT = 50000
-STEPS = 1000000
-
-COLS = [
-    'Episode',
-    'Frame',
-    'Lives',
-    'Bombs',
-    'Score',
-    'Combo',
-    'Reward',
-    'Hit',
-    'RewardSum',
-    'Enemies',
-    'Bullets',
-    'Ownshot',
-    'Bonuses',
-    'PowerUp'
-]
+        plot.set_title('')
+        plot.set_xlabel('')
+        plot.set_ylabel('')
+        plot.set_xticks([])
+        plot.set_yticks([])
 
 
-def get_snap_dir(ep_dir):
-    return os.path.join(ep_dir, SNAP_DIR)
+def draw_inputs(cursor, candidate):
+    num = math.floor(math.sqrt(WINDOW_SIZE))
+    dim = 7 * num
+    img = Image.new('RGB', (dim, dim), '#FFFFFF')
+    drw = ImageDraw.Draw(img)
+
+    for idx, action in enumerate(candidate):
+        background = '#AAAAAA'
+        if idx < cursor:
+            background = '#FFFFFF'
+
+        x = idx % num
+        y = math.floor(idx / num)
+
+        rectangle = (x * 7 + 1, y * 7 + 1, (x + 1)
+                     * 7 - 2, (y + 1) * 7 - 2)
+        drw.rectangle(rectangle, fill=background)
+
+        rectangle = (x * 7 + 3, y * 7 + 2, x * 7 + 3, y * 7 + 2)
+        colour = '#222222'
+        if action[0] == '2':
+            colour = '#FF0000'
+
+        drw.rectangle(rectangle, fill=colour)
+
+        rectangle = (x * 7 + 3, y * 7 + 4, x * 7 + 3, y * 7 + 4)
+        colour = '#222222'
+        if action[0] == '1':
+            colour = '#FF0000'
+
+        drw.rectangle(rectangle, fill=colour)
+
+        rectangle = (x * 7 + 2, y * 7 + 3, x * 7 + 2, y * 7 + 3)
+        colour = '#222222'
+        if action[1] == '1':
+            colour = '#FF0000'
+
+        drw.rectangle(rectangle, fill=colour)
+
+        rectangle = (x * 7 + 4, y * 7 + 3, x * 7 + 4, y * 7 + 3)
+        colour = '#222222'
+        if action[1] == '2':
+            colour = '#FF0000'
+
+        drw.rectangle(rectangle, fill=colour)
+
+    return img
 
 
-def get_stats_file(ep_dir):
-    return os.path.join(ep_dir, STATS_FILE)
+def get_best_individual(pop):
+    sortpop = sorted(pop, key=lambda p: p.fitness.values[0])
+    return sortpop[-1]
 
 
-def generate_episode_serial(ep_num):
-    serial = generate_now_serial_number()
-    serial = '{:08} - {}'.format(ep_num, serial)
-    return serial
+class Exy:
+    size = WINDOW_SIZE
+
+    def __init__(self, cwd):
+        self.rng = random.Random()
+
+        cwd = Path(cwd)
+        self.inp = cwd / 'inp'
+        self.fxd = cwd / 'fxd'
+        self.rnd = cwd / 'rnd'
+        self.snp = cwd / 'snp'
+        ensure_directories(*[str(p) for p in [self.inp, self.rnd, self.snp]])
+
+        if not self.fxd.exists():
+            with open(self.fxd, 'w') as fixed:
+                pass
+
+        self.fitness = None
+        self.individual = None
+        self.toolbox = None
+
+        self.game = None
+        self.game_img = None
+        self.current_input = None
+        self.current_input_img = None
+        self.current_combo = None
+        self.current_score = None
+        self.success_rate = None
+        self.best_combo = None
+        self.best_score = None
+
+        self.current_deaths = 0
+        self.current_success = 0
+
+        self.fixed_steps = 0
+
+        self.frame = 1
+
+        self.pop = None
+
+        self.reset_plots()
+        self.setup_deap()
+
+    def reset_plots(self):
+        plt.figure(1, figsize=(8, 4))
+
+        grid = (4, 8)
+
+        self.game = plt.subplot2grid(grid, (0, 0), colspan=3, rowspan=4)
+        self.game_img = None
+
+        self.success_rate = plt.subplot2grid(grid, (0, 3),
+                                             colspan=2, rowspan=2)
+
+        self.best_score = plt.subplot2grid(grid, (0, 5), colspan=2)
+        self.best_combo = plt.subplot2grid(grid, (1, 5), colspan=2)
+
+        self.current_input = plt.subplot2grid(grid, (2, 3),
+                                              colspan=2, rowspan=2)
+
+        self.current_score = plt.subplot2grid(grid, (2, 5), colspan=2)
+        self.current_combo = plt.subplot2grid(grid, (3, 5), colspan=2)
+
+        self.reset_game_plot('Game')
+        self.reset_best()
+        self.reset_current()
+
+    def reset_game_plot(self, title):
+        clear_labels_ticks(self.game)
+        self.game.set_title(title, fontsize=FONT_SIZE)
+        self.game.set_xlabel(WATERMARK, fontsize=WATERMARK_SIZE)
+        self.game_img = None
+
+    def reset_current(self):
+        clear_labels_ticks(self.current_input, self.current_score,
+                           self.current_combo)
+
+        self.current_input_img = None
+
+        self.current_input.set_xlabel('Input', fontsize=FONT_SIZE)
+        self.current_combo.set_xlabel('Score & Combo', fontsize=FONT_SIZE)
+
+        self.current_combo.set_xlim(-1, WINDOW_SIZE)
+        self.current_score.set_xlim(-1, WINDOW_SIZE)
+
+    def reset_best(self):
+        clear_labels_ticks(self.success_rate, self.best_score, self.best_combo)
+
+        self.success_rate.set_title('Success/Death', fontsize=FONT_SIZE)
+
+        self.best_score.set_title('Best Score & Combo / Gen',
+                                  fontsize=FONT_SIZE)
+
+        self.best_combo.set_xlim(-1, GENS)
+        self.best_score.set_xlim(-1, GENS)
+
+    def setup_deap(self):
+        self.fitness = creator.create('FitnessMax', base.Fitness,
+                                      weights=(1.0, 1.0))
+
+        creator.create('Individual', list, fitness=creator.FitnessMax)
+        self.individual = creator.Individual
+
+        self.toolbox = base.Toolbox()
+        self.toolbox.register('individual',
+                              self.generate_candidate, Exy.size)
+        self.toolbox.register('population', tools.initRepeat, list,
+                              self.toolbox.individual)
+        self.toolbox.register('evaluate', self.evaluate)
+        self.toolbox.register('mate', tools.cxTwoPoint)
+        self.toolbox.register('mutate', self.mutate)
+        self.toolbox.register('select', tools.selTournament, tournsize=3)
+
+    def open_ddonpach(self, recording):
+        ddonpach = Ddonpach(recording)
+        ddonpach.inp_dir = str(self.inp)
+        ddonpach.snp_dir = str(self.snp)
+        return ddonpach
+
+    def count_fixed_steps(self):
+        self.fixed_steps = 0
+        with open(self.fxd, 'r') as fixed:
+            for action in fixed:
+                self.fixed_steps += 1
+
+    def replay(self, ddonpach):
+        with open(self.fxd, 'r') as fixed:
+            for action in fixed:
+                ddonpach.send_action(action)
+                state = ddonpach.read_gamestate()
+
+    def sample_action(self):
+        vert, hori = self.rng.choice(DIRECTIONS)
+        shot = 1
+        return get_action_str(vert=vert, hori=hori, shot=shot)
+
+    def generate_candidate(self, size):
+        candidate = [self.sample_action() for _ in range(size)]
+        candidate = self.individual(candidate)
+        return candidate
+
+    def generate_candidates(self, count):
+        candidates = []
+        for i in range(count):
+            candidate = self.generate_candidate(Exy.size)
+            candidates.append(candidate)
+        return candidates
+
+    def mutate(self, individual):
+        spot = self.rng.randint(0, len(individual) - 1)
+        individual[spot] = self.sample_action()
+        return individual,
+
+    def evaluate(self, candidate):
+        recording = get_now_string()
+        with self.open_ddonpach(recording) as ddonpach:
+            self.replay(ddonpach)
+
+            self.reset_current()
+
+            trace = []
+            combos = []
+            scores = []
+
+            for idx, action in enumerate(candidate):
+                ddonpach.send_action(action)
+                observation = ddonpach.read_gamestate()
+
+                score = observation['score']
+                combo = observation['combo']
+
+                snap = ddonpach.get_snap()
+                if self.game_img:
+                    self.game_img.set_data(snap)
+                else:
+                    self.game_img = self.game.imshow(snap)
+
+                inputs = draw_inputs(idx, candidate)
+                if self.current_input_img:
+                    self.current_input_img.set_data(inputs)
+                else:
+                    self.current_input_img = self.current_input.imshow(inputs)
+                self.current_score.plot(idx, score, 'ro', markersize=1)
+                self.current_combo.plot(idx, combo, 'bo', markersize=1)
+
+                out_file = '{:09}.png'.format(int(self.frame / 2))
+                out_file = str(self.rnd / out_file)
+                if observation['death']:
+                    img = Image.open('death.png')
+                    self.current_input.imshow(img)
+                    self.current_deaths += 1
+                    self.plot_success_rate()
+                    if self.frame % 2 == 0:
+                        plt.savefig(out_file, dpi=200)
+                    self.frame += 1
+                    return -100 / (idx + 1), -100 / (idx + 1)
+                else:
+                    if self.frame % 2 == 0:
+                        plt.savefig(out_file, dpi=200)
+                    self.frame += 1
+
+                scores.append(score)
+                combos.append(combo)
+                trace.append(action)
+
+            self.current_success += 1
+            self.plot_success_rate()
+
+            return score, np.average(combos)
+
+    def plot_success_rate(self):
+        total = self.current_success + self.current_deaths
+        rate = [self.current_success / total, self.current_deaths / total]
+        self.success_rate.pie(rate, colors=['g', 'r'])
+
+    def get_success_rate(self, last_success):
+        total = [1 for ind in self.pop if ind.fitness.valid]
+        total = len(total) + 1
+        success = [1 for ind in self.pop
+                   if ind.fitness.valid and ind.fitness.values[0] >= 0]
+        failure = [1 for ind in self.pop
+                   if ind.fitness.valid and ind.fitness.values[0] < 0]
+
+        if last_success:
+            success.append(1)
+        else:
+            failure.append(1)
+
+        sizes = [len(success) / total, len(failure) / total]
+
+        return sizes
+
+    def evolution_step(self):
+        self.reset_best()
+
+        self.current_deaths = 0
+        self.current_success = 0
+
+        g = 0
+
+        title = '{} steps fixed, generation {}/{}'
+        title = title.format(self.fixed_steps, g, GENS)
+        self.reset_game_plot(title)
+
+        self.pop = self.toolbox.population(n=POP)
+
+        fitnesses = list(map(self.toolbox.evaluate, self.pop))
+        for ind, fit in zip(self.pop, fitnesses):
+            ind.fitness.values = fit
+
+        best_ind = get_best_individual(self.pop)
+
+        self.best_score.plot(g, best_ind.fitness.values[0], 'ro', markersize=1)
+        self.best_combo.plot(g, best_ind.fitness.values[1], 'bo', markersize=1)
+
+        known_best = best_ind
+
+        while g < GENS:
+            g += 1
+
+            title = '{} steps fixed, generation {}/{}'
+            title = title.format(self.fixed_steps, g, GENS)
+            self.reset_game_plot(title)
+
+            offspring = self.toolbox.select(self.pop, len(self.pop))
+            offspring = list(map(self.toolbox.clone, offspring))
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if self.rng.random() < CXPB:
+                    self.toolbox.mate(child1, child2)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            for mutant in offspring:
+                if self.rng.random() < MUTPB:
+                    self.toolbox.mutate(mutant)
+                    del mutant.fitness.values
+
+            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+            fitnesses = map(self.toolbox.evaluate, invalid_ind)
+            for ind, fit in zip(invalid_ind, fitnesses):
+                ind.fitness.values = fit
+
+            best_ind = get_best_individual(self.pop)
+            if best_ind.fitness.values > known_best.fitness.values:
+                known_best = best_ind
+
+            self.best_score.plot(g, known_best.fitness.values[0],
+                                 'ro', markersize=1)
+            self.best_combo.plot(g, known_best.fitness.values[1],
+                                 'bo', markersize=1)
+
+            self.pop[:] = offspring
+
+        return known_best, known_best.fitness.values[0]
+
+    def backtrack(self):
+        with open(self.fxd, 'r') as fixed:
+            lines = fixed.readlines()
+
+        if len(lines) >= Exy.size:
+            lines = lines[:len(lines) - Exy.size]
+        else:
+            lines = []
+
+        with open(self.fxd, 'w') as fixed:
+            for line in lines:
+                fixed.write('{}\n'.format(line))
+
+    def progression(self):
+        while True:
+            self.count_fixed_steps()
+            best, score = self.evolution_step()
+            if score >= 0:
+                with open(self.fxd, 'a') as fixed:
+                    for line in best:
+                        fixed.write('{}\n'.format(line))
+            else:
+                self.backtrack()
 
 
-class EXY(Callback):
-    """
-    The EXY class is used to gradually train a neural net to perform well in
-    DoDonPachi. It's initialised with a working directory it will store
-    training data, including a brain file containing the current weights of the
-    neural network, to. This folder includes recordings of the AI's run,
-    leaderboards, and regular snapshots.
+def evolve(cwd):
+    e = Exy(cwd)
+    e.progression()
 
-    If the directory already contains a brain file named as defined in
-    `BRAIN_FILE`, the current state of the brain will be loaded for further
-    training. Similarly, a properties file `PROPS_FILE` will be read to resume
-    EXY's state from where it was left off.
-    """
 
-    def __init__(self, exy_dir, agent_name):
-        self.exy_dir = exy_dir
-        self.agent_name = agent_name
-
-        self.ddonpach = None
-        self.env = None
-
-        self.warmup = WARMUP_INIT
-
-        self.episode_num = 0
-        self.episode_ser = None
-        self.episode_dir = None
-        self.leaderboard = []
-
-        self.current_stats = None
-
-    def get_brain_file(self):
-        """Returns the path to the brain file of this EXY instance."""
-        return os.path.join(self.exy_dir, BRAIN_FILE)
-
-    def get_props_file(self):
-        """Returns the path to the properties file of this EXY instance."""
-        return os.path.join(self.exy_dir, PROPS_FILE)
-
-    def get_episodes_dir(self):
-        """Returns the path to the episodes directory of this EXY instance."""
-        return os.path.join(self.exy_dir, EPS_DIR)
-
-    def get_episode_dir(self, ep_ser):
-        """
-        Returns the path to the episode directory of the given serial number in
-        this EXY instance.
-        """
-        episodes = self.get_episodes_dir()
-        path = os.path.join(episodes, ep_ser)
-        return path
-
-    def get_stop_file(self):
-        """
-        Returns the path to the file created when EXY is supposed to stop.
-        """
-        return os.path.join(self.exy_dir, STOP_FILE)
-
-    def load_properties(self):
-        """
-        Loads previously saved EXY properties from the properties file in this
-        EXY instance's working directory. If no such file exists, nothing
-        happens.
-        """
-        props_file = self.get_props_file()
-        if not os.path.exists(props_file):
-            return
-
-        with open(props_file, 'r') as in_file:
-            props_str = in_file.read()
-            props_dic = json.loads(props_str)
-
-            self.episode_num = props_dic['episode_num']
-            self.leaderboard = props_dic['leaderboard']
-            self.warmup = props_dic['warmup']
-            log.debug('Loaded EXY properties from: %s', props_file)
-
-    def save_properties(self):
-        """
-        Saves this EXY instance's properties to a properties file in this
-        instance's working directory. An existing file would be overwritten.
-        """
-        props_file = self.get_props_file()
-        with open(props_file, 'w') as out_file:
-            props_dic = dict()
-            props_dic['episode_num'] = self.episode_num
-            props_dic['leaderboard'] = self.leaderboard
-            props_dic['warmup'] = self.warmup
-            props_str = json.dumps(props_dic, indent=4)
-
-            out_file.write(props_str)
-            log.debug('Saved EXY properties to: %s', props_file)
-
-    def load_brain(self, agent):
-        """
-        Loads weights from a previously saved brain file into the given agent.
-        The function looks for the file in this EXY instance's working
-        directory. If no file is found, nothing happens.
-        """
-        brain_file = self.get_brain_file()
-        if not os.path.exists(brain_file):
-            return
-
-        agent.load_weights(brain_file)
-        log.debug('Loaded brain from: %s', brain_file)
-
-    def save_brain(self, agent):
-        """
-        Saves the given agent's weights to a brain file in this EXY instance's
-        working directory.
-        """
-        brain_file = self.get_brain_file()
-        agent.save_weights(brain_file, overwrite=True)
-        log.debug('Saved brain to: %s', brain_file)
-
-    def setup_next_episode(self):
-        """
-        Sets up the next episode to be executed by creating required
-        directories in the EXY working directory. The episode counter is
-        increased and the `current_stats` file to write to updated
-        accordingly.
-        """
-        self.episode_num += 1
-        self.episode_ser = generate_episode_serial(self.episode_num)
-        log.debug('Starting new episode: %s', self.episode_ser)
-
-        self.episode_dir = self.get_episode_dir(self.episode_ser)
-        snap_dir = get_snap_dir(self.episode_dir)
-        ensure_directories(self.episode_dir, snap_dir)
-
-        self.ddonpach.inp_dir = self.episode_dir
-        self.ddonpach.snp_dir = snap_dir
-
-        self.current_stats = get_stats_file(self.episode_dir)
-
-    def setup(self):
-        """
-        Setups up the agent instance and output directories based on the given
-        environment.
-        """
-        actions = self.env.action_space.shape[0]
-
-        agent = agents.create_agent(self.agent_name,
-                                    self,
-                                    self.env,
-                                    actions)
-
-        ensure_directories(self.exy_dir)
-
-        self.load_brain(agent)
-        self.load_properties()
-
-        self.setup_next_episode()
-
-        return agent
-
-    def on_step_end(self, step, logs=None):
-        """
-        Called after each step performed during training. Fetches various
-        statistics from the DoDonBotchi environment and writes them to the
-        current episode's stats file.
-        """
-        row = [
-            self.episode_num,
-            self.env.current_frame,
-            self.env.current_lives,
-            self.env.current_bombs,
-            self.env.current_score,
-            self.env.current_combo,
-            self.env.current_reward,
-            self.env.current_hit,
-            self.env.reward_sum,
-            len(self.env.current_observation['enemies']),
-            len(self.env.current_observation['bullets']),
-            len(self.env.current_observation['ownshot']),
-            len(self.env.current_observation['bonuses']),
-            len(self.env.current_observation['powerup'])
-        ]
-        row = [str(c) for c in row]
-        row = ';'.join(row)
-        log.debug('Got step statistics: %s', row)
-        row += '\n'
-
-        with open(self.current_stats, 'a') as out_file:
-            out_file.write(row)
-
-        # ^C on Windows doesn't quit keras-rl's agent. Instead, we expect the
-        # User to create a stop file and raise the KeyboardInterrupt
-        # manually.                   v_v
-        stop_file = self.get_stop_file()
-        if os.path.exists(stop_file):
-            os.remove(stop_file)
-            raise KeyboardInterrupt()  # lol
-
-    def on_episode_end(self, episode, logs=None):
-        """
-        Called after each episode finishes. Fetches the last episode's score
-        and enters them into EXY's leaderboard, sorted by score.
-        """
-        entry = {'ep': self.episode_ser, 'score': self.env.current_score}
-        log.debug('Episode %s ended with score: %s', self.episode_ser,
-                  self.env.current_score)
-        self.leaderboard.append(entry)
-        self.leaderboard = sorted(self.leaderboard, key=lambda e: e['score'])
-        self.leaderboard.reverse()
-        if len(self.leaderboard) > 32:
-            self.leaderboard = self.leaderboard[:32]
-
-        self.setup_next_episode()
-        self.save_properties()
-        log.debug('Finished an episode. Feel free to quit training with ^C.')
-
-    def train(self):
-        """
-        Creates a DoDonPachi environment and a reinforcement learning agent for
-        it and then trains it on that environment. Training can be interrupted
-        and after training, either manually stopped or regularly terminated,
-        current weights will be saved to EXY's brain file.
-        """
-        self.ddonpach = Ddonpach()
-        self.env = DoDonPachiEnv(self.ddonpach)
-        agent = self.setup()
-        log.info('Starting main training loop.')
-        try:
-            self.env.reset()
-            agent.fit(self.env, callbacks=[self], nb_steps=STEPS, verbose=2)
-        finally:
-            self.env.close()
-            self.save_brain(agent)
-
-    def test(self, episodes):
-        """
-        Creates a DoDonPachi environment and a reinforcement learning agent for
-        it and then trains it on that environment. Training can be interrupted
-        and after training, either manually stopped or regularly terminated,
-        current weights will be saved to EXY's brain file.
-        """
-        self.env = DoDonPachiEnv()
-        agent = self.setup()
-        log.info('Starting main training loop.')
-        try:
-            agent.test(self.env, nb_episodes=episodes)
-        finally:
-            self.env.close()
-
-    def plot_lm(self, plot_file, stats, x, y):
-        plot = sns.lmplot(x=x, y=y, data=stats,
-                          palette='muted', scatter_kws={'s': 0.1})
-        plot.savefig(plot_file, dpi=300)
-        log.info('Plotted: %s', plot_file)
-        plt.close('all')
-
-    def plot_overall(self):
-        overall = []
-        total_steps = 0
-
-        episodes_dir = self.get_episodes_dir()
-        episodes = sorted(os.listdir(episodes_dir))
-        for episode in episodes:
-            episode_dir = os.path.join(episodes_dir, episode)
-            stats_file = get_stats_file(episode_dir)
-            with open(stats_file, 'r') as in_file:
-                stats = in_file.readlines()
-            steps = len(stats)
-            total_steps += steps
-            stats = stats[-1]
-            stats = stats.split(';')
-            stats = stats + [steps, total_steps]
-            overall.append(stats)
-
-        columns = COLS + ['Steps', 'TotalSteps']
-        stats = pd.DataFrame(data=overall, columns=columns)
-        stats[columns] = stats[columns].apply(pd.to_numeric, axis=1)
-
-        score_episode = os.path.join(self.exy_dir, 'score_episode.png')
-        self.plot_lm(score_episode, stats, 'Episode', 'Score')
-
-        steps_episode = os.path.join(self.exy_dir, 'steps_episode.png')
-        self.plot_lm(steps_episode, stats, 'Episode', 'Steps')
-
-        total_steps_episode = os.path.join(self.exy_dir,
-                                           'total_steps_episode.png')
-        self.plot_lm(total_steps_episode, stats, 'Episode', 'TotalSteps')
+def replay(cwd):
+    e = Exy(cwd)
+    e.replay()

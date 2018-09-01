@@ -7,6 +7,7 @@ import logging as log
 import math
 import os
 import random
+import shutil
 import socket
 import subprocess
 
@@ -15,7 +16,6 @@ from time import sleep
 import numpy as np
 
 from jinja2 import Environment, FileSystemLoader
-#from rl.core import Env, Space
 from PIL import Image
 
 from dodonbotchi.config import CFG as cfg
@@ -32,212 +32,7 @@ MAX_DISTANCE = 400  # Furthest distance two objects can have in 240x320
 
 
 def get_action_str(vert=0, hori=0, shot=0, bomb=0):
-    return f'{vert}{hori}{shot}{bomb}'
-
-
-class DoDonPachiActions():
-    """
-    This class defines the valid action space for DoDonBotchi. Actions are
-    encoded as strings representing button and direction states. The format of
-    these strings is:
-
-        VH1
-
-    Where V stands for the vertical axis, H for the horizontal axis, and 1 for
-    button 1. An actual action replaces each of these with the corresponding
-    input state:
-
-        210
-
-    This example represents positive movement along the V axis, negative
-    movement along the H axis, and not pressing 1. The same directions, but
-    pressing 1, would be `211`, and so on.
-
-    """
-
-    def __init__(self, seed=None):
-        self.directions = 'VH'
-        self.buttons = '12'
-        self.axis_states = '012'
-        self.button_states = '01'
-
-        self.shape = len(self.axis_states) ** len(self.directions)
-        self.shape *= len(self.button_states) ** len(self.buttons)
-        self.shape = (self.shape,)
-
-        self.rng = random.Random()
-        if seed:
-            self.rng.seed(seed)
-
-    def from_ordinal(self, ordinal):
-        """
-        Converts an ordinal integer representing an action to an action encoded
-        in the string format outlined above.
-        """
-        if ordinal >= self.shape[0]:
-            raise ValueError('Invalid action ordinal: {}'.format(ordinal))
-
-        action = ''
-        base = len(self.axis_states)
-        for _ in self.directions:
-            idx = ordinal % base
-            action += self.axis_states[idx]
-            ordinal //= base
-        base = len(self.button_states)
-        for _ in self.buttons:
-            idx = ordinal % base
-            action += self.button_states[idx]
-            ordinal //= base
-
-        assert len(action) == len(self.directions) + len(self.buttons)
-        return action
-
-    def sample(self, seed=None):
-        """
-        Creates a random DoDonPachi input action.
-        """
-        if seed:
-            self.rng.seed(seed)
-
-        ret = ''
-        for _ in self.directions:
-            state = self.rng.choice(self.axis_states)
-            ret += state
-        for _ in self.buttons:
-            state = self.rng.choice(self.button_states)
-            ret += state
-        return ret
-
-    def contains(self, action):
-        """
-        Tests if the given action string is a member of this action space and
-        returns True iff it is.
-        """
-        if not isinstance(action, str):
-            return False
-        if len(action) != len(self.buttons) + len(self.directions):
-            return False
-
-        for state in action[:len(self.directions)]:
-            if state not in self.axis_states:
-                return False
-
-        for state in action[len(self.directions):]:
-            if state not in self.button_states:
-                return False
-
-        return True
-
-
-def get_point_distance(a_x, a_y, b_x, b_y, root=False):
-    """
-    Returns the distance between the points a and b, given as x, y coordinate
-    pairs. If the root flag is set, the actual distance between them is
-    returned, otherwise, the squared distance is returned. This helps save
-    processing time when distances are only used for comparisons.
-    """
-    a = b_x - a_x
-    b = b_y - a_y
-    dist = a ** 2 + b ** 2
-    if root:  # sqrt is an expensive operation so we make it optional
-        dist = math.sqrt(dist)
-    return dist
-
-
-def find_closest_object(needle_x, needle_y, haystack):
-    """
-    Finds the object with the shortest distance to the given x, y coordinates
-    within the given list of objects. Objects are expected as dictionaries that
-    contain their position in `pos_x` and `pos_y` entries.
-    """
-    min_dist = MAX_DISTANCE ** 2
-    min_obj = None
-    for obj in haystack:
-        obj_x = obj['pos_x']
-        obj_y = obj['pos_y']
-        obj_dist = get_point_distance(needle_x, needle_y, obj_x, obj_y)
-        if obj_dist < min_dist:
-            min_dist = obj_dist
-            min_obj = obj
-    return min_obj, math.sqrt(min_dist)
-
-
-def grade_observation(obs):
-    """
-    Grades the quality of the given observation, returning a value between 0.0
-    and 1.0 -- the higher the better.
-
-    The grading criteria are:
-
-        - Shortest distance of an own shot to an enemy
-        - Shortest distance of an enemy shot to our ship
-        - Combo timer
-
-    A perfect grade is rewarded when the shortest distance from one of our
-    shots to an enemy is 1, the shortest distance of an enemy shot to our ship
-    is 400, and the combo timer is full.
-
-    Special cases are when there are simply no enemies or bullets on screen; in
-    those cases, the function assigns a perfect score to those components of
-    the grade.
-
-    The resulting grade is returned as a number.
-    """
-    ship = obs['ship']
-    ship_x = ship['x']
-    ship_y = ship['y']
-
-    combo = obs['combo']
-
-    enemies = obs['enemies']
-    bullets = obs['bullets']
-    ownshot = obs['ownshot']
-
-    bullet_reward = 1
-    enemy_reward = 1
-    combo_reward = combo / MAX_COMBO
-
-    log.info('Current combo timer is: %s', combo)
-    log.info('Determined combo reward to be: %s', combo_reward)
-
-    bullet, bullet_dist = find_closest_object(ship_x, ship_y, bullets)
-    if bullet:
-        log.debug('Closest bullet at %s: %s: %s, %s',
-                  bullet_dist,
-                  bullet['id'],
-                  bullet['pos_x'],
-                  bullet['pos_y'])
-        bullet_reward = bullet_dist / MAX_DISTANCE
-    else:
-        log.debug('No bullet on screen.')
-    log.info('Determined bullet reward to be: %s', bullet_reward)
-
-    enemy, enemy_dist = None, MAX_DISTANCE
-    for own in ownshot:
-        own_x = own['pos_x']
-        own_y = own['pos_y']
-        cur_enemy, cur_dist = find_closest_object(own_x, own_y, enemies)
-        if cur_dist < enemy_dist:
-            enemy = cur_enemy
-            enemy_dist = cur_dist
-    if enemy:
-        if enemy_dist == 0:
-            enemy_dist = 1  # Avoid division by 0
-        log.debug('Closest enemy at %s: %s: %s, %s',
-                  enemy_dist,
-                  enemy['id'],
-                  enemy['pos_x'],
-                  enemy['pos_y'])
-        enemy_reward = 1.0 / enemy_dist
-    else:
-        log.debug('No enemy/ownshot on screen.')
-    log.info('Determined enemy reward to be: %s', enemy_reward)
-
-    reward = combo_reward + bullet_reward + enemy_reward
-    reward /= 3
-    log.info('Determined observation reward to be: %s', reward)
-
-    return reward
+    return '{}{}{}{}'.format(vert, hori, shot, bomb)
 
 
 def get_plugin_path():
@@ -328,27 +123,20 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
         call.append('-snapshot_directory')
         call.append(snp_dir)
 
-    # call.append('-aviwrite')
-    # call.append(avi_file)
+    call.append('-aviwrite')
+    call.append(avi_file)
 
-    return subprocess.call(call, shell=True)
+    return subprocess.call(call, shell=SHELL)
 
 
 class Ddonpach:
-    # class DoDonPachiEnv(Env):
-    """
-    Implements an OpenAI-Gym-like envirionment that starts and interfaces with
-    MAME running DoDonPachi. The respective action and observation spaces are
-    defined in the DoDonPachiActions and DoDonPachiObservations classes. What
-    this class does is offer a way to perform actions within MAME-emulated
-    DoDonPachi through a socket and retrieve observations from there. Lives and
-    scores in those observations are tracked to compute action rewards.
-    """
 
-    def __init__(self, mode, seed=None):
+    def __init__(self, recording=None, seed=None):
         self.inp_dir = None
         self.snp_dir = None
         self.sav_dir = None
+
+        self.recording = recording
 
         self.process = None
         self.server = None
@@ -361,7 +149,7 @@ class Ddonpach:
         self.server.listen()
         log.info('Started socket server on %s:%s', cfg.host, cfg.port)
 
-        write_plugin(mode=mode, **cfg)
+        write_plugin(**cfg)
 
     def send_message(self, message, force=False):
         """
@@ -401,7 +189,6 @@ class Ddonpach:
     def send_load_state(self, name):
         self.send_command('load', name=name)
         ack = self.read_message()
-        print(ack)
         assert ack['message'] == 'ACK'
 
     def read_message(self):
@@ -416,17 +203,10 @@ class Ddonpach:
         self.waiting = True
         return json.loads(line)
 
-    def read_observation(self):
-        """
-        Reads an observation from the client and renders an artificial frame
-        containing the objects described in the observation. The image is
-        returned as a numpy array alongside the observation dictionary
-        originally sent by the client.
-        """
+    def read_gamestate(self):
         message = self.read_message()
-        observation_dic = message['observation']
-
-        return observation_dic
+        state_dic = message['state']
+        return state_dic
 
     def get_snap(self):
         self.send_command('snap')
@@ -435,13 +215,17 @@ class Ddonpach:
 
         snap_dir = os.path.join(self.snp_dir, 'ddonpach')
         snaps = list(sorted(os.listdir(snap_dir)))
+        snaps = [snap for snap in snaps if snap != 'current.png']
         snap = snaps[-1]
         snap = os.path.join(snap_dir, snap)
-        ret = Image.open(snap)
-        os.remove(snap)
+        dest = os.path.join(snap_dir, 'current.png')
+        shutil.copy(snap, dest)
+        if os.path.exists(snap):
+            os.remove(snap)
+        ret = Image.open(dest)
         return ret
 
-    def start_mame(self):
+    def start_mame(self, avi=None):
         """
         Boots up MAME with the globally configured options and additionally
         setting it to record inputs this environment's respective folders for
@@ -456,8 +240,9 @@ class Ddonpach:
         abs_inp_dir = os.path.abspath(self.inp_dir)
         call.append('-input_directory')
         call.append(abs_inp_dir)
-        call.append('-record')
-        call.append(RECORDING_FILE)
+        if self.recording:
+            call.append('-record')
+            call.append(self.recording)
 
         abs_snp_dir = os.path.abspath(self.snp_dir)
         call.append('-snapshot_directory')
@@ -468,8 +253,9 @@ class Ddonpach:
             call.append('-state_directory')
             call.append(abs_sav_dir)
 
-        # call.append('-aviwrite')
-        # call.append('brute.avi')
+        if avi:
+            call.append('-aviwrite')
+            call.append(avi)
 
         self.process = subprocess.Popen(call, shell=SHELL)
         log.info('Started MAME with dodonbotchi ipc & dodonpachi.')
@@ -517,27 +303,6 @@ class Ddonpach:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop_mame()
 
-    def reward_step(self, action, observation):
-        lives = observation['lives']
-        score = observation['score']
-
-        reward = score - self.current_score
-        done = lives == 2
-
-        if done:
-            reward = -1
-
-        return reward, done, {}
-
-    def render(self, mode='human', close=False):
-        """
-        Meaningless function in our context, since rendering is turned off/on
-        in the global config that gets passed to MAME. Only implemented as part
-        of the Env interface.
-        """
-        # Kind of meaningless in our setup, so this method is empty.
-        pass
-
     def close(self):
         """
         Kills MAME and closes the server socket.
@@ -552,129 +317,3 @@ class Ddonpach:
         self.server = None
         self.client = None
         self.sfile = None
-
-
-class DoDonPachiEnv():
-    def __init__(self, ddonpach):
-        self.ddonpach = ddonpach
-        self.reward_range = (-1, 1)
-        self.action_space = DoDonPachiActions()
-
-        self.obs_count = 0
-
-        self.current_frame = 0
-        self.current_lives = 0
-        self.current_score = 0
-        self.current_bombs = 0
-        self.current_combo = 0
-        self.current_hit = 0
-        self.reward_sum = 0
-        self.current_observation = None
-        self.current_reward = 0
-        self.max_hit = -1
-
-        write_plugin(mode='bot', **cfg)
-
-    def configure(self, *args, **options):
-        pass
-
-    def seed(self, seed=None):
-        return [seed]
-
-    def step(self, action):
-        """
-        Performs the given action in this environment. The action can either be
-        an integer representing an ordinal value in our action space, or a
-        string formatted as defined in DoDonPachiActions. The method returns a
-        tuple of (observation, reward, done, aux) representing the observation
-        after the action was performed, the reward gained from it, whether the
-        simulation is done, and auxiliary data to give additional and optional
-        info.
-        """
-        if isinstance(action, np.integer):
-            action = self.action_space.from_ordinal(action)
-        if not self.action_space.contains(action):
-            raise ValueError('Action not in action space: {}'.format(action))
-
-        log.debug('Performing DoDonBotchi action: %s', action)
-        self.ddonpach.send_action(action)
-        log.debug('Action sent. Waiting for observation...')
-        observation = self.ddonpach.read_observation()
-        self.current_frame = observation['frame']
-
-        reward, done, aux = self.reward_step(action, observation)
-
-        log.info('Got step reward: %s', reward)
-
-        self.current_lives = observation['lives']
-        self.current_score = observation['score']
-        self.current_combo = observation['combo']
-        self.current_bombs = observation['bombs']
-        self.current_hit = observation['hit']
-        self.current_observation = observation
-
-        self.current_reward = reward
-
-        if self.current_hit > self.max_hit:
-            self.max_hit = self.current_hit
-
-        self.reward_sum += reward
-
-        return observation, reward, done, aux
-
-    def reward_step(self, action, observation):
-        lives = observation['lives']
-        score = observation['score']
-
-        reward = score - self.current_score
-        done = lives == 2
-
-        if done:
-            reward = -1
-
-        return reward, done, {}
-
-    def reset_stats(self):
-        self.current_frame = 0
-        self.current_lives = 0
-        self.current_score = 0
-        self.current_bombs = 0
-        self.current_combo = 0
-        self.current_reward = 0
-        self.current_hit = 0
-        self.reward_sum = 0
-        self.max_hit = -1
-
-    def reset(self):
-        """
-        Resets MAME and DoDonPachi to start from scratch. The initial
-        observation immediately after starting the game is returned.
-        """
-        self.current_observation = None
-
-        self.reset_stats()
-
-        self.ddonpach.stop_mame()
-        self.ddonpach.start_mame()
-
-        observation = self.ddonpach.read_observation()
-
-        self.current_lives = observation['lives']
-        self.current_score = observation['score']
-        self.current_combo = observation['combo']
-        self.current_bombs = observation['bombs']
-        self.current_hit = observation['hit']
-
-        return observation
-
-    def render(self, mode='human', close=False):
-        """
-        Meaningless function in our context, since rendering is turned off/on
-        in the global config that gets passed to MAME. Only implemented as part
-        of the Env interface.
-        """
-        # Kind of meaningless in our setup, so this method is empty.
-        pass
-
-    def close(self):
-        self.ddonpach.close()
