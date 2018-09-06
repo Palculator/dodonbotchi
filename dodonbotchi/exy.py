@@ -1,5 +1,6 @@
 import copy
 import json
+import logging as log
 import math
 import os
 import random
@@ -36,8 +37,8 @@ assert len(DIRECTIONS) == 8
 
 WINDOW_SIZE = 64
 CXPB, MUTPB = 0.5, 0.2
-POP = 16
-GENS = 10
+POP = 4
+GENS = 2
 
 FONT_SIZE = 10
 WATERMARK = '@Signaltonsalat'
@@ -110,6 +111,10 @@ def get_best_individual(pop):
     return sortpop[-1]
 
 
+class DdonpachSyncError(Exception):
+    pass
+
+
 class Exy:
     size = WINDOW_SIZE
 
@@ -147,8 +152,6 @@ class Exy:
         self.fixed_steps = 0
 
         self.frame = 1
-
-        self.pop = None
 
         self.reset_plots()
         self.setup_deap()
@@ -237,9 +240,12 @@ class Exy:
 
     def replay(self, ddonpach):
         with open(self.fxd, 'r') as fixed:
-            for action in fixed:
+            for line in fixed:
+                action, score = line.split(';')
                 ddonpach.send_action(action)
                 state = ddonpach.read_gamestate()
+                if int(score) != state['score']:
+                    raise DdonpachSyncError('Score out of sync during replay.')
 
     def sample_action(self):
         vert, hori = self.rng.choice(DIRECTIONS)
@@ -263,84 +269,103 @@ class Exy:
         individual[spot] = self.sample_action()
         return individual,
 
+    def render_snap(self, snap):
+        if self.game_img:
+            self.game_img.set_data(snap)
+        else:
+            self.game_img = self.game.imshow(snap)
+
+    def render_inputs(self, inputs):
+        if self.current_input_img:
+            self.current_input_img.set_data(inputs)
+        else:
+            self.current_input_img = self.current_input.imshow(inputs)
+
     def evaluate(self, candidate):
         recording = get_now_string()
-        with self.open_ddonpach(recording) as ddonpach:
-            self.replay(ddonpach)
+        for _ in range(16):
+            with self.open_ddonpach(recording) as ddonpach:
+                try:
+                    self.replay(ddonpach)
+                except DdonpachSyncError as err:
+                    log.error('Desync!')
+                    log.exception(err)
+                    continue
 
-            self.reset_current()
+                self.reset_current()
 
-            trace = []
-            combos = []
-            scores = []
+                combos = []
 
-            for idx, action in enumerate(candidate):
-                ddonpach.send_action(action)
-                observation = ddonpach.read_gamestate()
+                for idx, action in enumerate(candidate):
+                    ddonpach.send_action(action)
+                    observation = ddonpach.read_gamestate()
 
-                score = observation['score']
-                combo = observation['combo']
+                    score = observation['score']
+                    combo = observation['combo']
 
-                snap = ddonpach.get_snap()
-                if self.game_img:
-                    self.game_img.set_data(snap)
-                else:
-                    self.game_img = self.game.imshow(snap)
+                    snap = ddonpach.get_snap()
+                    self.render_snap(snap)
 
-                inputs = draw_inputs(idx, candidate)
-                if self.current_input_img:
-                    self.current_input_img.set_data(inputs)
-                else:
-                    self.current_input_img = self.current_input.imshow(inputs)
-                self.current_score.plot(idx, score, 'ro', markersize=1)
-                self.current_combo.plot(idx, combo, 'bo', markersize=1)
+                    inputs = draw_inputs(idx, candidate)
+                    self.render_inputs(inputs)
 
-                out_file = '{:09}.png'.format(int(self.frame / 2))
-                out_file = str(self.rnd / out_file)
-                if observation['death']:
-                    img = Image.open('death.png')
-                    self.current_input.imshow(img)
-                    self.current_deaths += 1
-                    self.plot_success_rate()
-                    if self.frame % 2 == 0:
-                        plt.savefig(out_file, dpi=200)
-                    self.frame += 1
-                    return -100 / (idx + 1), -100 / (idx + 1)
-                else:
-                    if self.frame % 2 == 0:
-                        plt.savefig(out_file, dpi=200)
-                    self.frame += 1
+                    self.current_score.plot(idx, score, 'ro', markersize=1)
+                    self.current_combo.plot(idx, combo, 'bo', markersize=1)
 
-                scores.append(score)
-                combos.append(combo)
-                trace.append(action)
+                    out_file = '{:09}.png'.format(int(self.frame / 2))
+                    out_file = str(self.rnd / out_file)
 
-            self.current_success += 1
-            self.plot_success_rate()
+                    if observation['death']:
+                        img = Image.open('death.png')
+                        self.current_input.imshow(img)
+                        self.current_deaths += 1
+                        self.plot_success_rate()
+                        if self.frame % 2 == 0:
+                            plt.savefig(out_file, dpi=200)
+                        self.frame += 1
+                        return -100 / (idx + 1), -100 / (idx + 1)
+                    else:
+                        if self.frame % 2 == 0:
+                            plt.savefig(out_file, dpi=200)
+                        self.frame += 1
 
-            return score, np.average(combos)
+                    combos.append(combo)
+
+                    candidate[idx] = '{};{}'.format(action, score)
+
+                self.current_success += 1
+                self.plot_success_rate()
+
+                return score, np.average(combos)
+
+        # If we reach this, the replay desynced 16 times.
+        return -1000, -1000
 
     def plot_success_rate(self):
         total = self.current_success + self.current_deaths
         rate = [self.current_success / total, self.current_deaths / total]
         self.success_rate.pie(rate, colors=['g', 'r'])
 
-    def get_success_rate(self, last_success):
-        total = [1 for ind in self.pop if ind.fitness.valid]
-        total = len(total) + 1
-        success = [1 for ind in self.pop
-                   if ind.fitness.valid and ind.fitness.values[0] >= 0]
-        failure = [1 for ind in self.pop
-                   if ind.fitness.valid and ind.fitness.values[0] < 0]
+    def evaluate_population(self, pop):
+        fitnesses = list(map(self.toolbox.evaluate, pop))
+        for ind, fit in zip(pop, fitnesses):
+            ind.fitness.values = fit
 
-        if last_success:
-            success.append(1)
-        else:
-            failure.append(1)
+    def mate_population(self, pop):
+        offspring = self.toolbox.select(pop, len(pop))
+        offspring = list(map(self.toolbox.clone, offspring))
+        for child1, child2 in zip(offspring[::2], offspring[1::2]):
+            if self.rng.random() < CXPB:
+                self.toolbox.mate(child1, child2)
+                del child1.fitness.values
+                del child2.fitness.values
+        return offspring
 
-        sizes = [len(success) / total, len(failure) / total]
-
-        return sizes
+    def mutate_offspring(self, offspring):
+        for mutant in offspring:
+            if self.rng.random() < MUTPB:
+                self.toolbox.mutate(mutant)
+                del mutant.fitness.values
 
     def evolution_step(self):
         self.reset_best()
@@ -348,62 +373,51 @@ class Exy:
         self.current_deaths = 0
         self.current_success = 0
 
-        g = 0
+        gen = 0
 
         title = '{} steps fixed, generation {}/{}'
-        title = title.format(self.fixed_steps, g, GENS)
+        title = title.format(self.fixed_steps, gen, GENS)
         self.reset_game_plot(title)
 
-        self.pop = self.toolbox.population(n=POP)
+        pop = self.toolbox.population(n=POP)
 
-        fitnesses = list(map(self.toolbox.evaluate, self.pop))
-        for ind, fit in zip(self.pop, fitnesses):
-            ind.fitness.values = fit
+        self.evaluate_population(pop)
 
-        best_ind = get_best_individual(self.pop)
+        best_ind = get_best_individual(pop)
 
-        self.best_score.plot(g, best_ind.fitness.values[0], 'ro', markersize=1)
-        self.best_combo.plot(g, best_ind.fitness.values[1], 'bo', markersize=1)
+        self.best_score.plot(gen, best_ind.fitness.values[0],
+                             'ro', markersize=1)
+        self.best_combo.plot(gen, best_ind.fitness.values[1],
+                             'bo', markersize=1)
 
         known_best = best_ind
 
-        while g < GENS:
-            g += 1
+        while gen < GENS:
+            gen += 1
 
             title = '{} steps fixed, generation {}/{}'
-            title = title.format(self.fixed_steps, g, GENS)
+            title = title.format(self.fixed_steps, gen, GENS)
             self.reset_game_plot(title)
 
-            offspring = self.toolbox.select(self.pop, len(self.pop))
-            offspring = list(map(self.toolbox.clone, offspring))
-            for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                if self.rng.random() < CXPB:
-                    self.toolbox.mate(child1, child2)
-                    del child1.fitness.values
-                    del child2.fitness.values
-
-            for mutant in offspring:
-                if self.rng.random() < MUTPB:
-                    self.toolbox.mutate(mutant)
-                    del mutant.fitness.values
+            offspring = self.mate_population(pop)
+            self.mutate_offspring(offspring)
 
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-            fitnesses = map(self.toolbox.evaluate, invalid_ind)
-            for ind, fit in zip(invalid_ind, fitnesses):
-                ind.fitness.values = fit
+            self.evaluate_population(invalid_ind)
 
-            best_ind = get_best_individual(self.pop)
+            best_ind = get_best_individual(pop)
             if best_ind.fitness.values > known_best.fitness.values:
                 known_best = best_ind
 
-            self.best_score.plot(g, known_best.fitness.values[0],
-                                 'ro', markersize=1)
-            self.best_combo.plot(g, known_best.fitness.values[1],
-                                 'bo', markersize=1)
+            score = known_best.fitness.values[0]
+            combo = known_best.fitness.values[1]
 
-            self.pop[:] = offspring
+            self.best_score.plot(gen, score, 'ro', markersize=1)
+            self.best_combo.plot(gen, combo, 'bo', markersize=1)
 
-        return known_best, known_best.fitness.values[0]
+            pop[:] = offspring
+
+        return known_best
 
     def backtrack(self):
         with open(self.fxd, 'r') as fixed:
@@ -421,7 +435,8 @@ class Exy:
     def progression(self):
         while True:
             self.count_fixed_steps()
-            best, score = self.evolution_step()
+            best = self.evolution_step()
+            score = best.fitness.values[0]
             if score >= 0:
                 with open(self.fxd, 'a') as fixed:
                     for line in best:
