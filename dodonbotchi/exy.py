@@ -433,7 +433,7 @@ class Exy:
 
         with open(self.fxd, 'w') as fixed:
             for line in lines:
-                fixed.write('{}\n'.format(line))
+                fixed.write('{}'.format(line))
 
     def progression(self):
         while True:
