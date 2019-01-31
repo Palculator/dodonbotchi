@@ -274,7 +274,7 @@ class Ddonpach:
         if self.client and self.sfile:
             self.send_command('kill', force=True)
 
-        sleep(.1)
+        sleep(1.5)
 
         for _ in range(10):
             if not self.process:

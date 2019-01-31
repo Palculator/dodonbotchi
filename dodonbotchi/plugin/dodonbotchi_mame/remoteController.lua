@@ -15,28 +15,33 @@ function produceSocketOutput()
   local currentState = state.readGameState()
   local message = {message = 'gamestate', state = currentState}
   message = json.stringify(message)
-  
+
   ipc.sendMessage(message)
 end
 
 function handleSocketInput()
   local message = ipc.readMessage()
   if message ~= nil then
+    if message['command'] == 'wait' then
+      emu.unpause()
+      cooldown = tonumber(message['frames'])
+    end
+
     if message['command'] == 'kill' then
       manager:machine():exit()
     end
-    
+
     if message['command'] == 'action' then
       ctrl.performAction(message['inputs'])
       emu.unpause()
       sleepFrames = tickRate
     end
-    
+
     if message['command'] == 'snap' then
       screen:snapshot()
       ipc.sendACK()
     end
-    
+
     if message['command'] == 'save' then
       local name = message['name']
       manager:machine():save(name)
@@ -44,7 +49,7 @@ function handleSocketInput()
       ipc.sendACK()
       cooldown = 2
     end
-    
+
     if message['command'] == 'load' then
       local name = message['name']
       manager:machine():load(name)
@@ -61,11 +66,11 @@ function update()
     cooldown = cooldown - 1
     return
   end
-  
+
   if manager:machine().paused then
     handleSocketInput()
   end
-  
+
   if not manager:machine().paused then
     sleepFrames = sleepFrames - 1
     ctrl.updateInputStates()
@@ -84,12 +89,12 @@ function init(controller, gameState, comm)
   ctrl = controller
   state = gameState
   ipc = comm
-  
+
   emu.register_frame(update)
   emu.register_frame_done(update_post)
-  
+
   screen = manager:machine().screens[':screen']
-  
+
   emu.pause()
 end
 

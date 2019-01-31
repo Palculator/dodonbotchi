@@ -239,6 +239,8 @@ class Exy:
                 self.fixed_steps += 1
 
     def replay(self, ddonpach):
+        ddonpach.send_command(command='wait', frames=512)
+        ddonpach.read_gamestate()
         with open(self.fxd, 'r') as fixed:
             for line in fixed:
                 action, score = line.split(';')
