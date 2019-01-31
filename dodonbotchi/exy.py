@@ -333,6 +333,7 @@ class Exy:
 
                     combos.append(combo)
 
+                    action = action.split(';')[0]
                     candidate[idx] = '{};{}'.format(action, score)
 
                 self.current_success += 1
