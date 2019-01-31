@@ -274,13 +274,13 @@ class Ddonpach:
         if self.client and self.sfile:
             self.send_command('kill', force=True)
 
-        sleep(1)
+        sleep(.1)
 
         for _ in range(10):
             if not self.process:
                 break
 
-            log.debug('Waiting for MAME to die...')
+            log.info('Waiting for MAME to die...')
             try:
                 os.kill(self.process.pid, 0)
             except OSError:

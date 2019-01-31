@@ -52,7 +52,7 @@ def setup_logging(log_file, no_file=False):
 
     fmt = '%(asctime)s %(levelname)-8s %(message)s'
 
-    log.basicConfig(handlers=handlers, format=fmt, level=log.DEBUG)
+    log.basicConfig(handlers=handlers, format=fmt, level=log.INFO)
 
     sys.excepthook = log_exception
 
@@ -73,13 +73,13 @@ def cli(log_file=None, cfg_file=None, no_file=False):
 
 
 @cli.command()
-@click.argument('cwd', click.Path(file_okay=False))
+@click.argument('cwd', type=click.Path(file_okay=False))
 def progression(cwd):
     exy.evolve(cwd)
 
 
 @cli.command()
-@click.argument('cwd', click.Path(file_okay=False))
+@click.argument('cwd', type=click.Path(file_okay=False))
 def replay(cwd):
     exy.replay(cwd)
 

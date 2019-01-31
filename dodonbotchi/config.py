@@ -13,7 +13,7 @@ import logging as log
 import json
 import os
 
-MAME_PATH = os.path.expanduser('~/mame/')
+MAME_PATH = os.path.expanduser('~/.mame/')
 HOST = '127.0.0.1'
 PORT = 32512
 
