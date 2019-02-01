@@ -35,10 +35,10 @@ for vert in range(3):
 
 assert len(DIRECTIONS) == 8
 
-WINDOW_SIZE = 64
-CXPB, MUTPB = 0.5, 0.2
-POP = 4
-GENS = 2
+WINDOW_SIZE = 121
+CXPB, MUTPB = 0.5, 0.25
+POP = 8
+GENS = 16
 
 FONT_SIZE = 10
 WATERMARK = '@Signaltonsalat'
@@ -152,6 +152,7 @@ class Exy:
         self.fixed_steps = 0
 
         self.frame = 1
+        self.saved = 1
 
         self.reset_plots()
         self.setup_deap()
@@ -222,7 +223,7 @@ class Exy:
         self.toolbox.register('population', tools.initRepeat, list,
                               self.toolbox.individual)
         self.toolbox.register('evaluate', self.evaluate)
-        self.toolbox.register('mate', tools.cxTwoPoint)
+        self.toolbox.register('mate', tools.cxOnePoint)
         self.toolbox.register('mutate', self.mutate)
         self.toolbox.register('select', tools.selTournament, tournsize=3)
 
@@ -239,8 +240,8 @@ class Exy:
                 self.fixed_steps += 1
 
     def replay(self, ddonpach):
-        ddonpach.send_command(command='wait', frames=512)
-        ddonpach.read_gamestate()
+        ddonpach.send_command(command='wait', frames=360)
+        state = ddonpach.read_gamestate()
         with open(self.fxd, 'r') as fixed:
             for line in fixed:
                 action, score = line.split(';')
@@ -248,14 +249,16 @@ class Exy:
                 state = ddonpach.read_gamestate()
                 if int(score) != state['score']:
                     raise DdonpachSyncError('Score out of sync during replay.')
+            return state['score']
+        return -1
 
-    def sample_action(self):
+    def sample_action(self, count=1):
         vert, hori = self.rng.choice(DIRECTIONS)
-        shot = 1
+        shot = count % 2
         return get_action_str(vert=vert, hori=hori, shot=shot)
 
     def generate_candidate(self, size):
-        candidate = [self.sample_action() for _ in range(size)]
+        candidate = [self.sample_action(count=i) for i in range(size)]
         candidate = self.individual(candidate)
         return candidate
 
@@ -285,10 +288,11 @@ class Exy:
 
     def evaluate(self, candidate):
         recording = get_now_string()
+        starting_score = -1
         for _ in range(16):
             with self.open_ddonpach(recording) as ddonpach:
                 try:
-                    self.replay(ddonpach)
+                    starting_score = self.replay(ddonpach)
                 except DdonpachSyncError as err:
                     log.error('Desync!')
                     log.exception(err)
@@ -314,22 +318,21 @@ class Exy:
                     self.current_score.plot(idx, score, 'ro', markersize=1)
                     self.current_combo.plot(idx, combo, 'bo', markersize=1)
 
-                    out_file = '{:09}.png'.format(int(self.frame / 2))
+                    out_file = '{:09}.png'.format(int(self.saved))
                     out_file = str(self.rnd / out_file)
-
+                    self.frame += 1
                     if observation['death']:
                         img = Image.open('death.png')
                         self.current_input.imshow(img)
                         self.current_deaths += 1
                         self.plot_success_rate()
-                        if self.frame % 2 == 0:
-                            plt.savefig(out_file, dpi=200)
-                        self.frame += 1
+                        plt.savefig(out_file, dpi=300)
+                        self.saved += 1
                         return -100 / (idx + 1), -100 / (idx + 1)
                     else:
-                        if self.frame % 2 == 0:
-                            plt.savefig(out_file, dpi=200)
-                        self.frame += 1
+                        if self.frame % 8 == 0:
+                            plt.savefig(out_file, dpi=300)
+                            self.saved += 1
 
                     combos.append(combo)
 
@@ -339,10 +342,15 @@ class Exy:
                 self.current_success += 1
                 self.plot_success_rate()
 
-                return score, np.average(combos)
+                increase = score - starting_score
+                increase //= 10000
+                if combos[-1] > 0:
+                    return int(np.average(combos)), increase
+                else:
+                    return -1, increase
 
         # If we reach this, the replay desynced 16 times.
-        return -1000, -1000
+        return -10000, -10000
 
     def plot_success_rate(self):
         total = self.current_success + self.current_deaths
@@ -404,6 +412,11 @@ class Exy:
 
             offspring = self.mate_population(pop)
             self.mutate_offspring(offspring)
+            if random.random() < 0.25:
+                print('Introducing random candidate.')
+                intro = self.generate_candidate(Exy.size)
+                offspring.append(intro)
+                offspring = offspring[1:]
 
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             self.evaluate_population(invalid_ind)
@@ -412,8 +425,8 @@ class Exy:
             if best_ind.fitness.values > known_best.fitness.values:
                 known_best = best_ind
 
-            score = known_best.fitness.values[0]
-            combo = known_best.fitness.values[1]
+            score = known_best.fitness.values[1]
+            combo = known_best.fitness.values[0]
 
             self.best_score.plot(gen, score, 'ro', markersize=1)
             self.best_combo.plot(gen, combo, 'bo', markersize=1)
