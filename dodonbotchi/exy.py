@@ -370,11 +370,11 @@ class Exy:
                 self.plot_success_rate()
 
                 increase = score - starting_score
-                increase //= 10000
+                increase //= 5000
                 if combos[-1] > 0:
-                    return int(np.average(combos)), increase
+                    return increase, int(np.average(combos))
                 else:
-                    return -1, increase
+                    return increase, -1
 
         # If we reach this, the replay desynced 16 times.
         return -10000, -10000
@@ -452,8 +452,8 @@ class Exy:
             if best_ind.fitness.values > known_best.fitness.values:
                 known_best = best_ind
 
-            score = known_best.fitness.values[1]
-            combo = known_best.fitness.values[0]
+            score = known_best.fitness.values[0]
+            combo = known_best.fitness.values[1]
 
             self.best_score.plot(gen, score, 'ro', markersize=1)
             self.best_combo.plot(gen, combo, 'bo', markersize=1)
