@@ -3,7 +3,9 @@ import json
 import logging as log
 import math
 import os
+import queue
 import random
+import threading
 
 from pathlib import Path
 from time import sleep
@@ -35,14 +37,25 @@ for vert in range(3):
 
 assert len(DIRECTIONS) == 8
 
-WINDOW_SIZE = 121
-CXPB, MUTPB = 0.5, 0.25
+WINDOW_SIZE = 36
+CXPB, MUTPB = 0.5, 0.2
 POP = 8
-GENS = 16
+GENS = 5
 
 FONT_SIZE = 10
 WATERMARK = '@Signaltonsalat'
 WATERMARK_SIZE = 8
+
+save_queue = queue.Queue()
+finished = False
+
+
+def saver():
+    global save_queue
+    while save_queue.full() or not finished:
+        img, path = save_queue.get()
+        img.save(path)
+        save_queue.task_done()
 
 
 def clear_labels_ticks(*plots):
@@ -240,7 +253,7 @@ class Exy:
                 self.fixed_steps += 1
 
     def replay(self, ddonpach):
-        ddonpach.send_command(command='wait', frames=360)
+        ddonpach.send_command(command='wait', frames=480)
         state = ddonpach.read_gamestate()
         with open(self.fxd, 'r') as fixed:
             for line in fixed:
@@ -254,7 +267,7 @@ class Exy:
 
     def sample_action(self, count=1):
         vert, hori = self.rng.choice(DIRECTIONS)
-        shot = count % 2
+        shot = 1
         return get_action_str(vert=vert, hori=hori, shot=shot)
 
     def generate_candidate(self, size):
@@ -286,7 +299,18 @@ class Exy:
         else:
             self.current_input_img = self.current_input.imshow(inputs)
 
+    def enqueue_plot(self, path):
+        global save_queue
+        plt.gcf().set_dpi(300)
+        canvas = plt.get_current_fig_manager().canvas
+        canvas.draw()
+        img = Image.frombytes('RGB', canvas.get_width_height(),
+                              canvas.tostring_rgb())
+        save_queue.put((img, path))
+
     def evaluate(self, candidate):
+        global save_queue
+
         recording = get_now_string()
         starting_score = -1
         for _ in range(16):
@@ -297,6 +321,8 @@ class Exy:
                     log.error('Desync!')
                     log.exception(err)
                     continue
+
+                save_queue.join()
 
                 self.reset_current()
 
@@ -326,12 +352,13 @@ class Exy:
                         self.current_input.imshow(img)
                         self.current_deaths += 1
                         self.plot_success_rate()
-                        plt.savefig(out_file, dpi=300)
+
+                        self.enqueue_plot(out_file)
                         self.saved += 1
                         return -100 / (idx + 1), -100 / (idx + 1)
                     else:
                         if self.frame % 8 == 0:
-                            plt.savefig(out_file, dpi=300)
+                            self.enqueue_plot(out_file)
                             self.saved += 1
 
                     combos.append(combo)
@@ -462,8 +489,14 @@ class Exy:
 
 
 def evolve(cwd):
+    global finished
+
+    thread = threading.Thread(target=saver)
+    thread.start()
+
     e = Exy(cwd)
     e.progression()
+    finished = True
 
 
 def replay(cwd):
