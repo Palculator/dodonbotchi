@@ -467,7 +467,7 @@ class Exy:
             lines = fixed.readlines()
 
         if len(lines) >= Exy.size:
-            lines = lines[:len(lines) - Exy.size]
+            lines = lines[:len(lines) - Exy.size // 2]
         else:
             lines = []
 
