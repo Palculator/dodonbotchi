@@ -80,8 +80,9 @@ def progression(cwd):
 
 @cli.command()
 @click.argument('cwd', type=click.Path(file_okay=False))
-def replay(cwd):
-    exy.replay(cwd)
+@click.argument('recording')
+def replay(cwd, recording):
+    exy.replay(cwd, recording)
 
 
 if __name__ == '__main__':

@@ -45,6 +45,8 @@ local SCORE = 0x10161E
 local COMBO = 0x1017D1
 local HIT = 0x1017EA
 
+local SCORE_SCREEN = 0x1017A4
+
 local mem = nil
 local screen = nil
 
@@ -166,6 +168,11 @@ local function readDeath()
   return shipId == 0x100
 end
 
+local function readScoreScreen()
+  local scoreScreen = mem:read_u16(SCORE_SCREEN)
+  return scoreScreen == 0x300
+end
+
 local function readGameState()
   local currentXOffset = math.floor(mem:read_i16(X_OFFSET) / 64)
   local xDelta = xOffSet - currentXOffset
@@ -207,6 +214,8 @@ local function readGameState()
   local combo = readCombo()
   local death = readDeath()
   local hit = readHit()
+
+  local scoreScreen = readScoreScreen()
   
   local state = {
     x_off = currentXOffset,
@@ -224,7 +233,9 @@ local function readGameState()
     bombs = bombs,
     score = score,
     combo = combo,
-    hit = hit
+    hit = hit,
+
+    scoreScreen = scoreScreen
   }
   
   lastState = state

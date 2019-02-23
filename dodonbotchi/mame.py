@@ -68,7 +68,7 @@ def write_plugin(**options):
                 out_file.write(rendered)
 
 
-def generate_base_call():
+def generate_base_call(state=None):
     """
     Generates a list of parameters to start MAME with DoDonPachi which contain
     command line options corresponding to what's configured in the global
@@ -91,9 +91,9 @@ def generate_base_call():
         call.append('-sound')
         call.append('none')
 
-    if cfg.save_state:
+    if state:
         call.append('-state')
-        call.append(cfg.save_state)
+        call.append(state)
 
     return call
 
@@ -131,7 +131,7 @@ def render_avi(inp_file, avi_file, inp_dir=None, snp_dir=None):
 
 class Ddonpach:
 
-    def __init__(self, recording=None, seed=None):
+    def __init__(self, recording=None, seed=None, state=None):
         self.inp_dir = None
         self.snp_dir = None
         self.sav_dir = None
@@ -143,6 +143,11 @@ class Ddonpach:
         self.client = None
         self.sfile = None
         self.waiting = True
+
+        if not state:
+            self.state = cfg.save_state
+        else:
+            self.state = state
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((cfg.host, cfg.port))
@@ -233,7 +238,7 @@ class Ddonpach:
         """
         ensure_directories(self.inp_dir, self.snp_dir)
 
-        call = generate_base_call()
+        call = generate_base_call(self.state)
         call.append('-plugin')
         call.append(PLUGIN_NAME)
 

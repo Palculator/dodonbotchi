@@ -10,6 +10,7 @@ local tickRate = {{tick_rate}}
 local sleepFrames = 15
 
 local cooldown = 0
+local waitScore = false
 
 function produceSocketOutput()
   local currentState = state.readGameState()
@@ -25,6 +26,11 @@ function handleSocketInput()
     if message['command'] == 'wait' then
       emu.unpause()
       cooldown = tonumber(message['frames'])
+    end
+
+    if message['command'] == 'waitScore' then
+      emu.unpause()
+      waitScore = true
     end
 
     if message['command'] == 'kill' then
@@ -64,6 +70,18 @@ end
 function update()
   if cooldown > 0 then
     cooldown = cooldown - 1
+    if cooldown <= 0 then
+      sleepFrames = 1
+    end
+    return
+  end
+
+  if waitScore then
+    local currentState = state.readGameState()
+    if not currentState.scoreScreen then
+      waitScore = false
+      sleepFrames = 1
+    end
     return
   end
 

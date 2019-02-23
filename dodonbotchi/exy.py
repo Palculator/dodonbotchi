@@ -37,10 +37,10 @@ for vert in range(3):
 
 assert len(DIRECTIONS) == 8
 
-WINDOW_SIZE = 36
+WINDOW_SIZE = 121
 CXPB, MUTPB = 0.5, 0.2
-POP = 8
-GENS = 5
+POP = 10
+GENS = 16
 
 FONT_SIZE = 10
 WATERMARK = '@Signaltonsalat'
@@ -139,11 +139,9 @@ class Exy:
         self.fxd = cwd / 'fxd'
         self.rnd = cwd / 'rnd'
         self.snp = cwd / 'snp'
-        ensure_directories(*[str(p) for p in [self.inp, self.rnd, self.snp]])
-
-        if not self.fxd.exists():
-            with open(self.fxd, 'w') as fixed:
-                pass
+        self.sav = cwd / 'sav'
+        dirs = [self.inp, self.rnd, self.snp, self.sav, self.fxd]
+        ensure_directories(*[str(p) for p in dirs])
 
         self.fitness = None
         self.individual = None
@@ -162,13 +160,40 @@ class Exy:
         self.current_deaths = 0
         self.current_success = 0
 
+        self.level = 0
+        self.current_sav = None
+        self.current_fxd = None
+
         self.fixed_steps = 0
 
         self.frame = 1
         self.saved = 1
 
+        self.inc_level(ensure=True)
         self.reset_plots()
         self.setup_deap()
+
+    def inc_level(self, ensure=False):
+        self.level += 1
+        self.current_sav = '{:03}'.format(self.level)
+        self.current_fxd = self.fxd / '{:03}.txt'.format(self.level)
+
+        if ensure and not self.current_fxd.exists():
+            with open(self.current_fxd, 'w') as fixed:
+                pass
+
+    def advance_level(self):
+        with self.open_ddonpach() as ddonpach:
+            _, finished = self.replay_level(ddonpach)
+            assert finished
+            ddonpach.send_command(command='wait', frames=380)
+            ddonpach.read_gamestate()
+
+            self.inc_level(ensure=True)
+
+            ddonpach.send_save_state(self.current_sav)
+
+
 
     def reset_plots(self):
         plt.figure(1, figsize=(8, 4))
@@ -225,7 +250,7 @@ class Exy:
 
     def setup_deap(self):
         self.fitness = creator.create('FitnessMax', base.Fitness,
-                                      weights=(1.0, 1.0))
+                                      weights=(1.0, 1.0, 1.0))
 
         creator.create('Individual', list, fitness=creator.FitnessMax)
         self.individual = creator.Individual
@@ -236,34 +261,55 @@ class Exy:
         self.toolbox.register('population', tools.initRepeat, list,
                               self.toolbox.individual)
         self.toolbox.register('evaluate', self.evaluate)
-        self.toolbox.register('mate', tools.cxOnePoint)
+        self.toolbox.register('mate', tools.cxTwoPoint)
         self.toolbox.register('mutate', self.mutate)
         self.toolbox.register('select', tools.selTournament, tournsize=3)
 
-    def open_ddonpach(self, recording):
-        ddonpach = Ddonpach(recording)
+    def open_ddonpach(self, recording=None):
+        ddonpach = Ddonpach(recording, state=self.current_sav)
         ddonpach.inp_dir = str(self.inp)
         ddonpach.snp_dir = str(self.snp)
+        ddonpach.sav_dir = str(self.sav)
         return ddonpach
 
     def count_fixed_steps(self):
         self.fixed_steps = 0
-        with open(self.fxd, 'r') as fixed:
+        with open(self.current_fxd, 'r') as fixed:
             for action in fixed:
                 self.fixed_steps += 1
 
-    def replay(self, ddonpach):
-        ddonpach.send_command(command='wait', frames=480)
-        state = ddonpach.read_gamestate()
-        with open(self.fxd, 'r') as fixed:
+    def replay_level(self, ddonpach):
+        if self.level == 1:
+            # Quirk because the load screen detection works by
+            # checking for the score results screen, but when
+            # starting the first level, there is no results
+            # screen, of course. Instead we wait a fixed time.
+            ddonpach.send_command(command='wait', frames=480)
+            ddonpach.read_gamestate()
+        else:
+            # Otherwise, it's assumed the game loaded inside a
+            # score screen that we wait to end.
+            ddonpach.send_action(get_action_str(vert=0, hori=0, shot=0))
+            state = ddonpach.read_gamestate()
+            ddonpach.send_command(command='waitScore')
+            state = ddonpach.read_gamestate()
+            # state = ddonpach.read_gamestate()
+            # assert state['scoreScreen']
+            # while state['scoreScreen']:
+
+        score = 0
+        with open(self.current_fxd, 'r') as fixed:
             for line in fixed:
                 action, score = line.split(';')
                 ddonpach.send_action(action)
                 state = ddonpach.read_gamestate()
                 if int(score) != state['score']:
                     raise DdonpachSyncError('Score out of sync during replay.')
-            return state['score']
-        return -1
+
+                if state['scoreScreen']:
+                    return int(score), True
+
+        return int(score), False
 
     def sample_action(self, count=1):
         vert, hori = self.rng.choice(DIRECTIONS)
@@ -316,7 +362,7 @@ class Exy:
         for _ in range(16):
             with self.open_ddonpach(recording) as ddonpach:
                 try:
-                    starting_score = self.replay(ddonpach)
+                    starting_score, finished = self.replay_level(ddonpach)
                 except DdonpachSyncError as err:
                     log.error('Desync!')
                     log.exception(err)
@@ -327,6 +373,7 @@ class Exy:
                 self.reset_current()
 
                 combos = []
+                finished = False
 
                 for idx, action in enumerate(candidate):
                     ddonpach.send_action(action)
@@ -355,7 +402,7 @@ class Exy:
 
                         self.enqueue_plot(out_file)
                         self.saved += 1
-                        return -100 / (idx + 1), -100 / (idx + 1)
+                        return -100 / (idx + 1), -100 / (idx + 1), False
                     else:
                         if self.frame % 8 == 0:
                             self.enqueue_plot(out_file)
@@ -366,18 +413,22 @@ class Exy:
                     action = action.split(';')[0]
                     candidate[idx] = '{};{}'.format(action, score)
 
+                    if observation['scoreScreen']:
+                        finished = True
+                        break
+
                 self.current_success += 1
                 self.plot_success_rate()
 
                 increase = score - starting_score
                 increase //= 5000
                 if combos[-1] > 0:
-                    return increase, int(np.average(combos))
+                    return increase, int(np.average(combos)), finished
                 else:
-                    return increase, -1
+                    return increase, -1, finished
 
         # If we reach this, the replay desynced 16 times.
-        return -10000, -10000
+        return -10000, -10000, False
 
     def plot_success_rate(self):
         total = self.current_success + self.current_deaths
@@ -454,16 +505,17 @@ class Exy:
 
             score = known_best.fitness.values[0]
             combo = known_best.fitness.values[1]
+            finished = known_best.fitness.values[2]
 
             self.best_score.plot(gen, score, 'ro', markersize=1)
             self.best_combo.plot(gen, combo, 'bo', markersize=1)
 
             pop[:] = offspring
 
-        return known_best
+        return known_best, known_best.fitness.values[2]
 
     def backtrack(self):
-        with open(self.fxd, 'r') as fixed:
+        with open(self.current_fxd, 'r') as fixed:
             lines = fixed.readlines()
 
         if len(lines) >= Exy.size:
@@ -471,21 +523,35 @@ class Exy:
         else:
             lines = []
 
-        with open(self.fxd, 'w') as fixed:
+        with open(self.current_fxd, 'w') as fixed:
             for line in lines:
                 fixed.write('{}'.format(line))
 
-    def progression(self):
+    def progression_level(self):
         while True:
             self.count_fixed_steps()
-            best = self.evolution_step()
+            best, finished = self.evolution_step()
             score = best.fitness.values[0]
             if score >= 0:
-                with open(self.fxd, 'a') as fixed:
+                with open(self.current_fxd, 'a') as fixed:
                     for line in best:
                         fixed.write('{}\n'.format(line))
+
+                if finished:
+                    break
             else:
                 self.backtrack()
+
+    def progression(self):
+        while True:
+            self.progression_level()
+            self.advance_level()
+
+    def replay(self, recording):
+        with self.open_ddonpach(recording) as ddonpach:
+            for _ in self.fxd.iterdir():
+                self.replay_level(ddonpach)
+                self.inc_level()
 
 
 def evolve(cwd):
@@ -499,6 +565,6 @@ def evolve(cwd):
     finished = True
 
 
-def replay(cwd):
+def replay(cwd, recording):
     e = Exy(cwd)
-    e.replay()
+    e.replay(recording)
